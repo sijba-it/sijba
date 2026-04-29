@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sjba</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; background: #0e0e0e; color: #d4d4d4; font-size: 13px; }
+  header { background: #1a1a1a; border-bottom: 1px solid #333; padding: 12px 20px;
+           display: flex; align-items: center; gap: 16px; }
+  header h1 { color: #7ec8e3; font-size: 16px; letter-spacing: 1px; }
+  header .status { font-size: 11px; color: #888; }
+  .layout { display: grid; grid-template-columns: 340px 1fr; height: calc(100vh - 45px); }
+  .panel { padding: 14px; overflow-y: auto; }
+  .panel + .panel { border-left: 1px solid #222; }
+  h2 { color: #aaa; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+       margin-bottom: 10px; }
+  /* Handlers */
+  .handler { background: #161616; border: 1px solid #272727; border-radius: 4px;
+             padding: 10px 12px; margin-bottom: 6px; cursor: default; }
+  .handler .top { display: flex; align-items: center; gap: 8px; }
+  .handler .hid { color: #e8e8e8; flex: 1; }
+  .handler .pri { color: #666; font-size: 11px; }
+  .handler .badge { font-size: 10px; padding: 2px 6px; border-radius: 3px; }
+  .badge.healthy   { background: #1a3a1a; color: #4caf50; }
+  .badge.degraded  { background: #3a1a1a; color: #e57373; }
+  .badge.stopped   { background: #2a2a2a; color: #888; }
+  .badge.starting  { background: #1a2a3a; color: #64b5f6; }
+  .badge.restarting{ background: #2a2a1a; color: #ffd54f; }
+  .badge.pending   { background: #222; color: #aaa; }
+  .handler .meta { color: #666; font-size: 11px; margin-top: 4px; }
+  .toggle-btn { background: none; border: 1px solid #444; color: #999; cursor: pointer;
+                padding: 2px 8px; border-radius: 3px; font-size: 11px; font-family: monospace; }
+  .toggle-btn:hover { border-color: #666; color: #ccc; }
+  /* Logs */
+  #log-panel { background: #0a0a0a; border: none; }
+  #log-box { height: calc(100% - 100px); overflow-y: auto; }
+  .log-entry { padding: 2px 0; border-bottom: 1px solid #111; white-space: pre-wrap; word-break: break-all; }
+  .log-entry .ts { color: #444; }
+  .log-entry .lvl { display: inline-block; width: 8ch; }
+  .lvl.DEBUG   { color: #555; }
+  .lvl.INFO    { color: #64b5f6; }
+  .lvl.WARNING { color: #ffd54f; }
+  .lvl.ERROR   { color: #e57373; }
+  /* Inject form */
+  .inject-form { margin-top: 10px; display: flex; gap: 6px; }
+  .inject-form input { flex: 1; background: #1a1a1a; border: 1px solid #333; color: #d4d4d4;
+                       padding: 6px 10px; border-radius: 3px; font-family: monospace; font-size: 13px; }
+  .inject-form input:focus { outline: none; border-color: #555; }
+  .inject-form button { background: #1e3a4a; border: 1px solid #2a5a6a; color: #7ec8e3;
+                        cursor: pointer; padding: 6px 14px; border-radius: 3px;
+                        font-family: monospace; font-size: 13px; }
+  .inject-form button:hover { background: #234a5a; }
+  /* Queue stats */
+  #queue-stats { font-size: 11px; color: #666; margin-bottom: 10px; }
+  /* Auth modal */
+  #auth-modal { position: fixed; inset: 0; background: rgba(0,0,0,.8);
+                display: flex; align-items: center; justify-content: center; z-index: 99; }
+  #auth-modal.hidden { display: none; }
+  .auth-box { background: #1a1a1a; border: 1px solid #333; border-radius: 6px;
+              padding: 24px; min-width: 320px; }
+  .auth-box h3 { color: #7ec8e3; margin-bottom: 14px; }
+  .auth-box input { width: 100%; background: #111; border: 1px solid #333; color: #d4d4d4;
+                    padding: 8px 10px; border-radius: 3px; font-family: monospace; margin-bottom: 10px; }
+  .auth-box button { width: 100%; background: #1e3a4a; border: 1px solid #2a5a6a; color: #7ec8e3;
+                     cursor: pointer; padding: 8px; border-radius: 3px; font-family: monospace; }
+</style>
+</head>
+<body>
+
+<div id="auth-modal">
+  <div class="auth-box">
+    <h3>Sijba — Authentication</h3>
+    <input type="password" id="token-input" placeholder="Bearer token (leave blank if none)" />
+    <button onclick="saveToken()">Connect</button>
+  </div>
+</div>
+
+<header>
+  <h1>&#9889; SIJBA</h1>
+  <span class="status" id="conn-status">connecting…</span>
+  <span class="status" id="queue-info"></span>
+</header>
+
+<div class="layout">
+  <!-- Left: handlers -->
+  <div class="panel" id="handler-panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <h2 style="margin:0;">Handlers</h2>
+      <button class="toggle-btn" onclick="reloadHandlers()" title="Hot-reload handlers/ directory">↺ reload</button>
+    </div>
+    <div id="handler-list">loading…</div>
+  </div>
+
+  <!-- Right: logs + inject -->
+  <div class="panel" id="log-panel">
+    <h2>Live Logs</h2>
+    <div id="log-box"></div>
+    <div style="margin-top:8px;">
+      <div id="queue-stats"></div>
+      <div class="inject-form">
+        <input type="text" id="inject-input" placeholder="Inject message text…" />
+        <button onclick="injectMessage()">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let TOKEN = localStorage.getItem('sijba_token') || '';
+let logBox = document.getElementById('log-box');
+let logCount = 0;
+const MAX_LOG = 500;
+
+// Auth modal
+if (!TOKEN) {
+  document.getElementById('auth-modal').classList.remove('hidden');
+} else {
+  document.getElementById('auth-modal').classList.add('hidden');
+  init();
+}
+
+function saveToken() {
+  TOKEN = document.getElementById('token-input').value;
+  localStorage.setItem('sijba_token', TOKEN);
+  document.getElementById('auth-modal').classList.add('hidden');
+  init();
+}
+
+function headers() {
+  const h = { 'Content-Type': 'application/json' };
+  if (TOKEN) h['Authorization'] = 'Bearer ' + TOKEN;
+  return h;
+}
+
+async function init() {
+  await loadHandlers();
+  connectSSE();
+  setInterval(loadQueue, 3000);
+  loadQueue();
+}
+
+async function loadHandlers() {
+  try {
+    const r = await fetch('/api/handlers', { headers: headers() });
+    if (r.status === 401) { showAuth(); return; }
+    const handlers = await r.json();
+    renderHandlers(handlers);
+  } catch(e) {
+    document.getElementById('handler-list').textContent = 'Error loading handlers';
+  }
+}
+
+function renderHandlers(handlers) {
+  const el = document.getElementById('handler-list');
+  if (!handlers.length) { el.textContent = 'No handlers loaded.'; return; }
+  el.innerHTML = handlers.map(h => `
+    <div class="handler" id="h-${h.id}">
+      <div class="top">
+        <span class="hid">${esc(h.id)}</span>
+        <span class="pri">${h.priority}</span>
+        <span class="badge ${h.state}">${h.state}</span>
+        <button class="toggle-btn" onclick="toggleHandler('${esc(h.id)}')">${h.state==='stopped'?'enable':'disable'}</button>
+      </div>
+      <div class="meta">${h.direction} · ${h.lifecycle} · ${h.type}${h.category.length?' · ['+h.category.join(', ')+']':''}</div>
+    </div>
+  `).join('');
+}
+
+async function toggleHandler(id) {
+  const r = await fetch('/api/handlers/'+encodeURIComponent(id)+'/toggle', {
+    method: 'POST', headers: headers()
+  });
+  if (r.ok) {
+    await loadHandlers();
+  }
+}
+
+async function reloadHandlers() {
+  await fetch('/api/handlers/reload', { method: 'POST', headers: headers() });
+  await loadHandlers();
+}
+
+async function loadQueue() {
+  try {
+    const r = await fetch('/api/queue', { headers: headers() });
+    const d = await r.json();
+    const inDone    = (d.inbound||{}).done    || 0;
+    const outDone   = (d.outbound||{}).done   || 0;
+    const inPend    = (d.inbound||{}).pending || 0;
+    const outPend   = (d.outbound||{}).pending || 0;
+    const pend = inPend + outPend;
+    document.getElementById('queue-info').textContent =
+      `processed in:${inDone} out:${outDone}` + (pend ? `  pending:${pend}` : '');
+  } catch(e) {}
+}
+
+function connectSSE() {
+  const url = TOKEN ? `/api/logs` : '/api/logs';
+  // Use EventSource with Authorization header via fetch+ReadableStream
+  fetchSSE('/api/logs');
+}
+
+function fetchSSE(url) {
+  fetch(url, { headers: headers() }).then(r => {
+    document.getElementById('conn-status').textContent = 'connected';
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    function read() {
+      reader.read().then(({done, value}) => {
+        if (done) { document.getElementById('conn-status').textContent = 'disconnected — reloading…';
+                    setTimeout(() => location.reload(), 3000); return; }
+        buf += dec.decode(value, {stream: true});
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        lines.forEach(line => {
+          if (line.startsWith('data: ')) {
+            try {
+              const entry = JSON.parse(line.slice(6));
+              if (!entry.ping) appendLog(entry);
+            } catch(e) {}
+          }
+        });
+        read();
+      }).catch(() => setTimeout(() => location.reload(), 3000));
+    }
+    read();
+  }).catch(() => {
+    document.getElementById('conn-status').textContent = 'error';
+    setTimeout(() => fetchSSE(url), 5000);
+  });
+}
+
+function appendLog(entry) {
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+  const ts = (entry.ts||'').replace('T',' ').slice(0,19);
+  div.innerHTML = `<span class="ts">${ts} </span><span class="lvl ${entry.level}">${(entry.level||'').padEnd(7)}</span> ${esc(entry.msg||'')}`;
+  logBox.appendChild(div);
+  logCount++;
+  // Trim old entries
+  while (logCount > MAX_LOG) {
+    logBox.removeChild(logBox.firstChild);
+    logCount--;
+  }
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+async function injectMessage() {
+  const input = document.getElementById('inject-input');
+  const text = input.value.trim();
+  if (!text) return;
+  const r = await fetch('/api/message', {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({text})
+  });
+  if (r.ok) {
+    input.value = '';
+  } else {
+    alert('Failed to inject message');
+  }
+}
+
+document.getElementById('inject-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') injectMessage();
+});
+
+function showAuth() {
+  document.getElementById('auth-modal').classList.remove('hidden');
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>

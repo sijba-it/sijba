@@ -1,0 +1,13 @@
+{
+  "id": "telegram-out",
+  "priority": 10.1,
+  "direction": "outbound",
+  "lifecycle": "persistent",
+  "type": "exec_json",
+  "shared_process": "telegram-source",
+  "await_response": true,
+  "timeout_seconds": 10,
+  "match": {
+    "source": ["telegram"]
+  }
+}

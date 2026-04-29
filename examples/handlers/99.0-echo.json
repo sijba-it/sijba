@@ -1,0 +1,10 @@
+{
+  "id": "echo",
+  "priority": 99.0,
+  "direction": "inbound",
+  "lifecycle": "per_message",
+  "type": "exec_json",
+  "required": false,
+  "exec": "{sijba_plugins}/echo.py",
+  "timeout_seconds": 30
+}

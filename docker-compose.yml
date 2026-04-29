@@ -1,0 +1,18 @@
+# Place this file in your sijba-config repo.
+# Run: docker compose up -d
+services:
+  sijba:
+    image: ghcr.io/yourname/sijba:latest
+    # build: /path/to/sijba  # uncomment to build locally
+    volumes:
+      - ./:/config
+      - ./secrets:/secrets:ro
+    environment:
+      - SIJBA_CONFIG_DIR=/config
+      - SIJBA_SECRETS_DIR=/secrets
+      # Override here or in core.yaml:
+      # - SIJBA_AUTH_TOKEN=changeme
+      # - SIJBA_WEBHOOK_TOKEN=changeme
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

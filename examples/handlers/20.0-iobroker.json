@@ -1,0 +1,19 @@
+{
+  "id": "iobroker",
+  "priority": 20.0,
+  "direction": "inbound",
+  "lifecycle": "per_message",
+  "type": "exec_json",
+  "exec": "{sijba_plugins}/iobroker/main.py",
+  "continue_on_match": false,
+  "match": {
+    "regex": "(?i)^iobroker\\b"
+  },
+  "router_hint": "Controls smart home devices via ioBroker. Trigger: start with 'iobroker'. Examples: 'iobroker turn on bubble', 'iobroker set Bubble true', 'iobroker get living room temperature', 'iobroker list', 'iobroker toggle kitchen light'.",
+  "env": {
+    "IOBROKER_URL": "${IOBROKER_URL}",
+    "IOBROKER_CACHE_FILE": "/tmp/iobroker_cache.json",
+    "IOBROKER_CACHE_TTL": "3600"
+  },
+  "timeout_seconds": 15
+}

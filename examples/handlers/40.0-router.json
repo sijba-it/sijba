@@ -1,0 +1,18 @@
+{
+  "id": "router",
+  "priority": 40.0,
+  "direction": "inbound",
+  "lifecycle": "per_message",
+  "type": "exec_json",
+  "exec": "{sijba_plugins}/router/main.py",
+  "receive_handler_context": true,
+  "continue_on_match": false,
+  "timeout_seconds": 30,
+  "env": {
+    "LLM_API_URL": "https://openrouter.ai/api/v1",
+    "LLM_API_KEY": "${OPENROUTER_API_KEY}",
+    "LLM_MODEL": "openai/gpt-4.1-nano",
+    "LLM_TEMPERATURE": "0.1",
+    "LLM_MAX_TOKENS": "64"
+  }
+}

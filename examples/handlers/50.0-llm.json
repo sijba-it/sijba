@@ -1,0 +1,20 @@
+{
+  "id": "llm",
+  "priority": 50.0,
+  "direction": "inbound",
+  "lifecycle": "per_message",
+  "type": "exec_json",
+  "exec": "{sijba_plugins}/llm/main.py",
+  "continue_on_match": false,
+  "router_hint": "General-purpose LLM assistant. Handles questions, conversation, explanations, summaries, and anything not covered by other plugins.",
+  "context": {
+    "namespace": "llm"
+  },
+  "env": {
+    "LLM_API_URL": "https://api.openai.com/v1",
+    "LLM_API_KEY": "${OPENAI_API_KEY}",
+    "LLM_MODEL": "gpt-4o-mini",
+    "LLM_SYSTEM_PROMPT": "You are a helpful assistant."
+  },
+  "timeout_seconds": 120
+}

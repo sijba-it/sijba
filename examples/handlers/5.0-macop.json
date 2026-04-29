@@ -1,0 +1,22 @@
+{
+  "id": "macop",
+  "priority": 5.0,
+  "direction": "inbound",
+  "lifecycle": "per_message",
+  "type": "exec_json",
+  "exec": "{sijba_plugins}/macop/main.py",
+  "match": {
+    "regex": "^macop\\b"
+  },
+  "continue_on_match": false,
+  "privileged": true,
+  "timeout_seconds": 30,
+  "env": {
+    "SIJBA_CONFIG_DIR": "${SIJBA_CONFIG_DIR}",
+    "MACOP_LLM_URL": "${MACOP_LLM_URL}",
+    "MACOP_LLM_KEY": "${MACOP_LLM_KEY}",
+    "MACOP_LLM_MODEL": "${MACOP_LLM_MODEL}",
+    "MACOP_LLM_FORMAT": "${MACOP_LLM_FORMAT}"
+  },
+  "router_hint": "System control: list/show/modify handler configs and restart sijba. Trigger: messages starting with 'macop'"
+}

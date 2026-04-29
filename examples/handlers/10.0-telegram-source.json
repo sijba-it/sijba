@@ -1,0 +1,15 @@
+{
+  "id": "telegram-source",
+  "priority": 10.0,
+  "direction": "source",
+  "lifecycle": "persistent",
+  "type": "exec_json",
+  "required": false,
+  "exec": "{sijba_plugins}/telegram.py",
+  "env": {
+    "TELEGRAM_BOT_TOKEN": "${TELEGRAM_BOT_TOKEN}"
+  },
+  "startup": {
+    "restart_policy": "on_failure"
+  }
+}

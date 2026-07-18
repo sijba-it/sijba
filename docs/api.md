@@ -39,6 +39,22 @@ curl -X POST http://localhost:8080/api/message \
   -d '{"text": "iobroker get Bubble"}'
 ```
 
+Optional body fields:
+
+| Field | Description |
+|-------|-------------|
+| `target` | Handler id or category — run only that part (skips match / full pipeline). Omit for the general inbound pipeline (router, LLM, …). |
+| `chat_id` | Stored in `source_meta` for the context store |
+| `source` | Defaults to `web` |
+
+```bash
+# Direct to one handler (no trigger prefix required)
+curl -X POST http://localhost:8080/api/message \
+  -H "Authorization: Bearer secret" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "get Bubble", "target": "iobroker", "chat_id": "web-1"}'
+```
+
 ### Webhook
 
 ```bash
@@ -49,15 +65,20 @@ curl -X POST http://localhost:8080/webhook/mytoken \
 
 ---
 
-## Logs
+## Logs & replies
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/logs` | SSE live log stream |
+| `GET` | `/api/replies` | SSE outbound replies for `web` / `app` sources |
+
+SSE clients that cannot set `Authorization` may pass `?token=<auth_token>`.
 
 ```bash
 curl -N http://localhost:8080/api/logs \
   -H "Authorization: Bearer secret"
+
+curl -N "http://localhost:8080/api/replies?token=secret"
 ```
 
 ---

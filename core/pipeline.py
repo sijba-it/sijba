@@ -53,17 +53,24 @@ def _matches(handler: dict, envelope: dict) -> bool:
 # Inject target resolution
 # ------------------------------------------------------------------
 
-def _resolve_inject_target(target: Optional[str]) -> list[dict]:
+def _resolve_inject_target(target: Optional[str], *, require_allow_direct: bool = True):
+    """Resolve a handler id or category to a handler list.
+
+    Returns:
+      None  — invalid / not allowed (caller should discard)
+      []    — no target (full pipeline)
+      [...] — run only these handlers
+    """
     if not target:
         return []
 
     for h in state.handlers:
         if h["id"] == target:
-            if not h.get("allow_direct_inject", False):
+            if require_allow_direct and not h.get("allow_direct_inject", False):
                 _logger.warning(
                     f"Inject target '{target}' found but allow_direct_inject=false — discarding"
                 )
-                return None  # type: ignore[return-value]
+                return None
             return [h]
 
     matched = [h for h in state.handlers if target in h.get("category", [])]
@@ -71,7 +78,7 @@ def _resolve_inject_target(target: Optional[str]) -> list[dict]:
         return matched
 
     _logger.error(f"Inject target '{target}' not found — discarding")
-    return None  # type: ignore[return-value]
+    return None
 
 
 # ------------------------------------------------------------------
@@ -140,7 +147,13 @@ def _outbound_handlers_for(envelope: dict) -> list:
     return []
 
 
-async def _run(direction: str, envelope: dict, handler_override: list = None) -> None:
+async def _run(
+    direction: str,
+    envelope: dict,
+    handler_override: list = None,
+    *,
+    skip_match: bool = False,
+) -> None:
     if handler_override is not None:
         handlers = handler_override
     elif direction == "outbound":
@@ -155,7 +168,9 @@ async def _run(direction: str, envelope: dict, handler_override: list = None) ->
         if hstate not in ("healthy",):
             continue
 
-        if not _matches(handler, envelope):
+        # Direct API/plugin targets skip match so the user can talk to a part
+        # without needing its trigger-word prefix.
+        if not skip_match and not _matches(handler, envelope):
             continue
 
         # Fire-and-forget
@@ -193,6 +208,15 @@ async def _run(direction: str, envelope: dict, handler_override: list = None) ->
                 "_respond_target": respond_target,
             }
             _enqueue_outbound(out_env)
+            # Let web/app clients hear replies without a dedicated outbound sink
+            if src in ("web", "app"):
+                state.broadcast_reply({
+                    "type": "reply",
+                    "text": respond_text,
+                    "parent_id": envelope["id"],
+                    "handler_id": hid,
+                    "source_meta": envelope.get("source_meta") or {},
+                })
 
         # inject → new inbound message
         if "inject" in response and response["inject"]:
@@ -215,7 +239,9 @@ async def _run(direction: str, envelope: dict, handler_override: list = None) ->
                 if target_handlers is None:
                     pass
                 elif target_handlers:
-                    asyncio.create_task(_run("inbound", child_env, target_handlers))
+                    asyncio.create_task(
+                        _run("inbound", child_env, target_handlers, skip_match=True)
+                    )
                 else:
                     _enqueue_inbound(child_env)
 
@@ -232,7 +258,18 @@ async def _run(direction: str, envelope: dict, handler_override: list = None) ->
 async def process_inbound(envelope: dict) -> None:
     src = envelope.get("source", "?")
     text = (envelope.get("pipeline_text") or "")[:80]
-    _logger.info(f"inbound [{src}]: {text!r}")
+    target = envelope.pop("_target", None)
+    _logger.info(f"inbound [{src}]: {text!r}" + (f" target={target}" if target else ""))
+
+    if target:
+        # API / web direct target — no allow_direct_inject gate (explicit user choice)
+        target_handlers = _resolve_inject_target(target, require_allow_direct=False)
+        if target_handlers is None:
+            return
+        if target_handlers:
+            await _run("inbound", envelope, target_handlers, skip_match=True)
+            return
+
     await _run("inbound", envelope)
 
 

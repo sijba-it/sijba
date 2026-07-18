@@ -188,7 +188,8 @@ curl -X DELETE http://localhost:8080/api/store/llm/123456789 -H "Authorization: 
 | `POST` | `/api/handlers/reload` | Hot-reload handlers (no restart needed) |
 | `GET` | `/api/logs` | SSE live log stream |
 | `GET` | `/api/queue` | Queue status counts |
-| `POST` | `/api/message` | Inject a message into the inbound pipeline |
+| `POST` | `/api/message` | Inject a message (`target` optional → one handler; omit → full pipeline) |
+| `GET` | `/api/replies` | SSE replies for `web` / `app` sources |
 | `POST` | `/webhook/{token}` | External webhook → inbound pipeline |
 | `GET` | `/api/store/{namespace}` | List context store keys |
 | `GET` | `/api/store/{namespace}/{key}` | Get store value |

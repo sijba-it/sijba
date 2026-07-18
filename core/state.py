@@ -18,3 +18,18 @@ log_buffer_max: int = 1000
 
 # Active SSE asyncio.Queue instances (one per connected browser)
 sse_queues: Set[asyncio.Queue] = set()
+
+# Active SSE queues for outbound replies (web/app clients)
+reply_queues: Set[asyncio.Queue] = set()
+
+
+def broadcast_reply(event: Dict[str, Any]) -> None:
+    """Fan-out a reply event to all connected /api/replies SSE clients."""
+    dead = []
+    for q in reply_queues:
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:
+            dead.append(q)
+    for q in dead:
+        reply_queues.discard(q)

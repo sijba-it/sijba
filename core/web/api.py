@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse
 
@@ -15,10 +16,19 @@ import core.log as log
 import core.state as state
 import core.msg_queue as queue
 import core.store as store
-import core.handler_loader as handler_loader
 
 _logger = log.get("api")
 app = FastAPI(title="Sjba", docs_url=None, redoc_url=None)
+
+# Separate frontend (sijba-web) talks cross-origin over Tailscale/LAN.
+# Auth remains Bearer — CORS is not a security boundary here.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 _auth_token: Optional[str] = None
 _webhook_token: Optional[str] = None
@@ -41,11 +51,19 @@ def configure(auth_token: str, webhook_token: str, config_dir: Path, reload_fn) 
 _bearer = HTTPBearer(auto_error=False)
 
 
-def _check_auth(creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> None:
+def _check_auth(
+    request: Request,
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+) -> None:
     if not _auth_token:
         return  # no auth configured
-    if not creds or creds.credentials != _auth_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    # EventSource cannot set Authorization headers — allow ?token= for SSE.
+    query_token = request.query_params.get("token")
+    if creds and creds.credentials == _auth_token:
+        return
+    if query_token and query_token == _auth_token:
+        return
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
 
 # ------------------------------------------------------------------
@@ -70,6 +88,8 @@ async def list_handlers():
             "type": h.get("type"),
             "state": state.handler_states.get(h["id"], "unknown"),
             "category": h.get("category", []),
+            "router_hint": h.get("router_hint"),
+            "match": h.get("match") or {},
         })
     return result
 
@@ -145,26 +165,71 @@ async def stream_logs(request: Request):
     return EventSourceResponse(_generator())
 
 
+@app.get("/api/replies", dependencies=[Depends(_check_auth)])
+async def stream_replies(request: Request):
+    """SSE endpoint: outbound replies for web/app clients."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=200)
+    state.reply_queues.add(q)
+
+    async def _generator():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    entry = await asyncio.wait_for(q.get(), timeout=15.0)
+                    yield {"data": json.dumps(entry)}
+                except asyncio.TimeoutError:
+                    yield {"data": json.dumps({"ping": True})}
+        finally:
+            state.reply_queues.discard(q)
+
+    return EventSourceResponse(_generator())
+
+
 @app.post("/api/message", dependencies=[Depends(_check_auth)])
 async def inject_message(request: Request):
+    """Inject a message into the inbound pipeline.
+
+    Body:
+      text       (required) message text
+      target     (optional) handler id or category — skip full pipeline / match
+      chat_id    (optional) stored in source_meta for context store
+      metadata   (optional) free-form dict
+      source     (optional) defaults to "web"
+    """
     body = await request.json()
     text = body.get("text", "")
     if not text:
         raise HTTPException(status_code=400, detail="text required")
 
+    target = body.get("target") or None
+    if target is not None:
+        target = str(target).strip() or None
+
+    source = body.get("source") or "web"
+    source_meta = dict(body.get("source_meta") or {})
+    if body.get("chat_id") is not None:
+        source_meta["chat_id"] = str(body["chat_id"])
+    source_meta.setdefault("user", "admin")
+
     envelope = {
         "id": str(uuid.uuid4()),
         "parent_id": None,
         "direction": "inbound",
-        "source": "web",
-        "source_meta": {"user": "admin"},
+        "source": source,
+        "source_meta": source_meta,
         "text": text,
         "pipeline_text": text,
         "depth": 0,
         "metadata": body.get("metadata") or {},
     }
+    if target:
+        # Validated when the inbound worker runs (handler may not be loaded yet)
+        envelope["_target"] = target
+
     mid = queue.enqueue_inbound(envelope)
-    return {"id": mid, "status": "queued"}
+    return {"id": mid, "status": "queued", "target": target}
 
 
 @app.post("/webhook/{token}")

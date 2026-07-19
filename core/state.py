@@ -3,8 +3,14 @@ from __future__ import annotations
 from typing import Any, Dict, List, Set
 import asyncio
 
-# Sorted list of loaded handler dicts
+# Sorted list of active handlers (file + dynamically registered)
 handlers: List[Dict[str, Any]] = []
+
+# Handlers loaded from handlers/*.json only (before remote merge)
+file_handlers: List[Dict[str, Any]] = []
+
+# Dynamically registered remote HTTP handlers: id -> {handler, expires_at, ...}
+registered_handlers: Dict[str, Dict[str, Any]] = {}
 
 # handler_id -> state string (pending/starting/healthy/degraded/restarting/stopped)
 handler_states: Dict[str, str] = {}

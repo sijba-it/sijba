@@ -90,8 +90,52 @@ async def list_handlers():
             "category": h.get("category", []),
             "router_hint": h.get("router_hint"),
             "match": h.get("match") or {},
+            "dynamic": bool(h.get("_dynamic")),
         })
     return result
+
+
+@app.post("/api/register", dependencies=[Depends(_check_auth)])
+async def register_handler(request: Request):
+    """Register (or refresh) a remote HTTP handler / pipeline.
+
+    Body:
+      id, url (required)
+      match, router_hint, priority, invoke_path, health_path,
+      timeout_seconds, ttl_seconds, continue_on_match, category
+    """
+    import core.registry as registry
+
+    body = await request.json()
+    try:
+        return registry.register(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/register/{handler_id}/heartbeat", dependencies=[Depends(_check_auth)])
+async def register_heartbeat(handler_id: str, request: Request):
+    """Refresh TTL for a registered remote handler."""
+    import core.registry as registry
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    ttl = body.get("ttl_seconds") if isinstance(body, dict) else None
+    if not registry.heartbeat(handler_id, ttl):
+        raise HTTPException(status_code=404, detail="not registered")
+    return {"id": handler_id, "status": "ok"}
+
+
+@app.delete("/api/register/{handler_id}", dependencies=[Depends(_check_auth)])
+async def unregister_handler(handler_id: str):
+    import core.registry as registry
+
+    if not registry.unregister(handler_id):
+        raise HTTPException(status_code=404, detail="not registered")
+    return {"id": handler_id, "status": "unregistered"}
 
 
 @app.post("/api/handlers/{handler_id}/toggle", dependencies=[Depends(_check_auth)])

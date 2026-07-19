@@ -82,17 +82,17 @@ def load(config_dir: Path) -> List[Dict[str, Any]]:
 
 
 def reload(config_dir: Path) -> None:
-    """Hot-reload handlers into shared state. Per-message handlers take effect
-    immediately; persistent handlers are NOT restarted."""
+    """Hot-reload file handlers, then re-merge dynamic registrations.
+
+    Per-message handlers take effect immediately; persistent handlers are NOT restarted.
+    """
+    import core.registry as registry
+
     new_handlers = load(config_dir)
-    existing_persistent_ids = {
-        hid for hid, ph in state.persistent.items()
-    }
+    state.file_handlers = new_handlers
 
-    state.handlers = new_handlers
-
-    # Initialise state for new handlers; preserve state for existing ones
-    new_ids = {h["id"] for h in new_handlers}
+    # Initialise state for new file handlers; preserve state for existing ones
+    new_ids = {h["id"] for h in new_handlers} | set(state.registered_handlers.keys())
     for h in new_handlers:
         hid = h["id"]
         if hid not in state.handler_states:
@@ -101,9 +101,13 @@ def reload(config_dir: Path) -> None:
             else:
                 state.handler_states[hid] = "healthy"
 
-    # Remove stale states for handlers that were removed
+    # Remove stale states for handlers that were removed (keep registered remotes)
     for hid in list(state.handler_states.keys()):
         if hid not in new_ids:
             del state.handler_states[hid]
 
-    _logger.info(f"Reloaded {len(new_handlers)} handlers")
+    registry.rebuild()
+    _logger.info(
+        f"Reloaded {len(new_handlers)} file handlers "
+        f"+ {len(state.registered_handlers)} registered"
+    )

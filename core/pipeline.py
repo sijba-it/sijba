@@ -216,7 +216,24 @@ async def _run(
                     "parent_id": envelope["id"],
                     "handler_id": hid,
                     "source_meta": envelope.get("source_meta") or {},
+                    "channel": envelope.get("_transcript_channel") or "pipeline",
                 })
+            # Persist bot reply for cross-device replay (bounded)
+            try:
+                import core.transcript as transcript
+                chat_id = (envelope.get("source_meta") or {}).get("chat_id")
+                if chat_id and respond_text:
+                    transcript.append(
+                        chat_id=str(chat_id),
+                        channel=envelope.get("_transcript_channel") or "pipeline",
+                        role="bot",
+                        text=respond_text,
+                        handler_id=hid,
+                        envelope_id=envelope.get("id"),
+                        source=src,
+                    )
+            except Exception as exc:
+                _logger.warning(f"transcript append (bot) failed: {exc}")
 
         # inject → new inbound message
         if "inject" in response and response["inject"]:
@@ -259,7 +276,27 @@ async def process_inbound(envelope: dict) -> None:
     src = envelope.get("source", "?")
     text = (envelope.get("pipeline_text") or "")[:80]
     target = envelope.pop("_target", None)
+    channel = target or "pipeline"
+    envelope["_transcript_channel"] = channel
     _logger.info(f"inbound [{src}]: {text!r}" + (f" target={target}" if target else ""))
+
+    # Record user message (depth 0 only — no inject echoes)
+    if envelope.get("depth", 0) == 0:
+        try:
+            import core.transcript as transcript
+            chat_id = (envelope.get("source_meta") or {}).get("chat_id")
+            body = envelope.get("pipeline_text") or envelope.get("text") or ""
+            if chat_id and body:
+                transcript.append(
+                    chat_id=str(chat_id),
+                    channel=channel,
+                    role="user",
+                    text=body,
+                    envelope_id=envelope.get("id"),
+                    source=src,
+                )
+        except Exception as exc:
+            _logger.warning(f"transcript append (user) failed: {exc}")
 
     if target:
         # API / web direct target — no allow_direct_inject gate (explicit user choice)

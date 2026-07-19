@@ -95,6 +95,7 @@ curl -X POST http://localhost:8080/webhook/mytoken \
 |--------|------|-------------|
 | `GET` | `/api/logs` | SSE live log stream |
 | `GET` | `/api/replies` | SSE outbound replies for `web` / `app` sources |
+| `GET` | `/api/transcript` | Recent messages for a `chat_id` + `channel` (bounded) |
 
 SSE clients that cannot set `Authorization` may pass `?token=<auth_token>`.
 
@@ -104,6 +105,17 @@ curl -N http://localhost:8080/api/logs \
 
 curl -N "http://localhost:8080/api/replies?token=secret"
 ```
+
+### Transcript
+
+Stored in SQLite (same DB as queues). Caps: **200 messages per (chat_id, channel)**; API `limit` default 100, max 200.
+
+```bash
+curl "http://localhost:8080/api/transcript?chat_id=web&channel=pipeline&limit=50" \
+  -H "Authorization: Bearer secret"
+```
+
+`channel` is `pipeline` for the full inbound chain, or a handler id for direct-target chats.
 
 ---
 

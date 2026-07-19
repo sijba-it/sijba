@@ -70,6 +70,8 @@ async def main() -> None:
         db_path = str(config_dir / db_path)
     queue.init(db_path)
     store.init(db_path)
+    import core.transcript as transcript
+    transcript.init(db_path)
     _logger.info(f"Queue/store DB: {db_path}")
 
     # Load handlers (files), then merge any dynamic registrations (none at boot)

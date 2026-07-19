@@ -231,6 +231,28 @@ async def stream_replies(request: Request):
     return EventSourceResponse(_generator())
 
 
+@app.get("/api/transcript", dependencies=[Depends(_check_auth)])
+async def get_transcript(
+    chat_id: str,
+    channel: str = "pipeline",
+    limit: int = 100,
+):
+    """Return recent messages for a chat/channel (oldest → newest).
+
+    Hard-capped in storage (200/channel) and by `limit` (max 200).
+    """
+    import core.transcript as transcript
+
+    if not chat_id:
+        raise HTTPException(status_code=400, detail="chat_id required")
+    msgs = transcript.list_messages(chat_id, channel=channel or "pipeline", limit=limit)
+    return {
+        "chat_id": chat_id,
+        "channel": channel or "pipeline",
+        "messages": msgs,
+    }
+
+
 @app.post("/api/message", dependencies=[Depends(_check_auth)])
 async def inject_message(request: Request):
     """Inject a message into the inbound pipeline.
@@ -256,6 +278,8 @@ async def inject_message(request: Request):
     if body.get("chat_id") is not None:
         source_meta["chat_id"] = str(body["chat_id"])
     source_meta.setdefault("user", "admin")
+    # Stable default so browsers share one transcript
+    source_meta.setdefault("chat_id", "web")
 
     envelope = {
         "id": str(uuid.uuid4()),

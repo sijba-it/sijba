@@ -72,14 +72,17 @@ async def main() -> None:
     store.init(db_path)
     _logger.info(f"Queue/store DB: {db_path}")
 
-    # Load handlers
-    state.handlers = handler_loader.load(config_dir)
-    for h in state.handlers:
+    # Load handlers (files), then merge any dynamic registrations (none at boot)
+    import core.registry as registry
+
+    state.file_handlers = handler_loader.load(config_dir)
+    for h in state.file_handlers:
         hid = h["id"]
         if h.get("lifecycle") == "persistent":
             state.handler_states[hid] = "pending"
         else:
             state.handler_states[hid] = "healthy"
+    registry.rebuild()
 
     # Wire pipeline
     pipeline.configure(
@@ -107,6 +110,17 @@ async def main() -> None:
     # Queue workers
     asyncio.create_task(queue.run_inbound_worker(pipeline.process_inbound))
     asyncio.create_task(queue.run_outbound_worker(pipeline.process_outbound))
+
+    # Expire stale remote handler registrations
+    async def _expire_loop() -> None:
+        while True:
+            await asyncio.sleep(15)
+            try:
+                registry.expire_stale()
+            except Exception as exc:
+                _logger.error(f"registry expire: {exc}")
+
+    asyncio.create_task(_expire_loop())
 
     _logger.info(f"Listening on 0.0.0.0:{cfg['port']}")
 

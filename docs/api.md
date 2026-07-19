@@ -20,6 +20,30 @@ All endpoints require `Authorization: Bearer <token>` when `auth_token` is set i
 | `GET` | `/api/handlers` | List all handlers with their states |
 | `POST` | `/api/handlers/{id}/toggle` | Enable / disable a handler |
 | `POST` | `/api/handlers/reload` | Hot-reload handler configs (no restart needed) |
+| `POST` | `/api/register` | Register a remote HTTP handler / pipeline |
+| `POST` | `/api/register/{id}/heartbeat` | Refresh TTL for a registered handler |
+| `DELETE` | `/api/register/{id}` | Unregister a remote handler |
+
+### Register a remote pipeline
+
+External processes (e.g. a kubectl agent on the k8s master) can attach at runtime.
+Core will `POST` the message envelope to `{url}{invoke_path}` and expect a normal plugin JSON response.
+
+```bash
+curl -X POST https://sijba.edv-bartl.at/api/register \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "kubectl",
+    "url": "http://10.5.191.10:9099",
+    "match": { "regex": "(?i)^pods\\b" },
+    "router_hint": "Kubernetes pods. Trigger: pods / pods top",
+    "ttl_seconds": 90,
+    "priority": 25
+  }'
+```
+
+`url` must be reachable **from the Core pod**. Use a node IP + hostPort, Tailscale IP, or in-cluster Service URL. Optional `ttl_seconds` — renew via heartbeat or re-register.
 
 ---
 

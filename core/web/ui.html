@@ -65,6 +65,9 @@
                     padding: 8px 10px; border-radius: 3px; font-family: monospace; margin-bottom: 10px; }
   .auth-box button { width: 100%; background: #1e3a4a; border: 1px solid #2a5a6a; color: #7ec8e3;
                      cursor: pointer; padding: 8px; border-radius: 3px; font-family: monospace; }
+  footer.ver { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5;
+               padding: 4px 14px; font-size: 10px; color: #555;
+               background: #0a0a0a; border-top: 1px solid #1a1a1a; }
 </style>
 </head>
 <body>
@@ -107,6 +110,8 @@
   </div>
 </div>
 
+<footer class="ver" id="ver-footer">sijba …</footer>
+
 <script>
 let TOKEN = localStorage.getItem('sijba_token') || '';
 let logBox = document.getElementById('log-box');
@@ -139,6 +144,17 @@ async function init() {
   connectSSE();
   setInterval(loadQueue, 3000);
   loadQueue();
+  loadVersion();
+}
+
+async function loadVersion() {
+  try {
+    const r = await fetch('/api/version');
+    if (!r.ok) return;
+    const v = await r.json();
+    const el = document.getElementById('ver-footer');
+    if (el) el.textContent = `sijba ${v.version || '?'} · ${v.commit || '?'}`;
+  } catch (_) {}
 }
 
 async function loadHandlers() {

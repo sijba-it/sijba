@@ -76,6 +76,17 @@ async def ui() -> HTMLResponse:
     return HTMLResponse(ui_path.read_text())
 
 
+@app.get("/api/version")
+async def version():
+    """Build/deploy identity (set at image build via Jenkins). No auth."""
+    import os
+    return {
+        "service": "sijba",
+        "version": os.environ.get("SIJBA_VERSION", "dev"),
+        "commit": os.environ.get("GIT_COMMIT", "unknown"),
+    }
+
+
 @app.get("/api/handlers", dependencies=[Depends(_check_auth)])
 async def list_handlers():
     result = []

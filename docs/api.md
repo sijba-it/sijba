@@ -17,6 +17,7 @@ All endpoints require `Authorization: Bearer <token>` when `auth_token` is set i
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/api/version` | Build version + git commit (no auth) |
 | `GET` | `/api/handlers` | List all handlers with their states |
 | `POST` | `/api/handlers/{id}/toggle` | Enable / disable a handler |
 | `POST` | `/api/handlers/reload` | Hot-reload handler configs (no restart needed) |

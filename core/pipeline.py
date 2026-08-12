@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 import core.log as log
 import core.state as state
 import core.plugin_runner as plugin_runner
+import core.registry as registry
 
 _logger = log.get("pipeline")
 
@@ -306,6 +307,29 @@ async def process_inbound(envelope: dict) -> None:
         if target_handlers:
             await _run("inbound", envelope, target_handlers, skip_match=True)
             return
+
+    # Check plugin channels for trigger match
+    pipeline_text = envelope.get("pipeline_text") or envelope.get("text", "")
+    plugin_channels = registry.list_plugin_channels()
+    for ch in plugin_channels:
+        triggers = ch.get("triggers", [])
+        for trigger in triggers:
+            if pipeline_text.lower().startswith(trigger.lower()):
+                # Match! Send to plugin channel
+                payload = {
+                    "envelope_id": envelope["id"],
+                    "text": pipeline_text,
+                    "source": envelope.get("source"),
+                    "source_meta": envelope.get("source_meta", {}),
+                    "context": envelope.get("context", {}),
+                    "channel_metadata": ch.get("metadata", {}),
+                }
+                sent = await registry.send_to_channel(ch["channel_id"], payload)
+                if sent:
+                    envelope["handlers_visited"] = envelope.get("handlers_visited", [])
+                    envelope["handlers_visited"].append(f"plugin:{ch['channel_id']}")
+                    _logger.info(f"Routed to plugin channel: {ch['channel_id']}")
+                    return  # Plugin takes over
 
     await _run("inbound", envelope)
 

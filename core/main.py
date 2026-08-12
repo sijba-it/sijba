@@ -124,6 +124,9 @@ async def main() -> None:
 
     asyncio.create_task(_expire_loop())
 
+    # Start plugin cleanup task
+    registry.start_plugin_cleanup_task()
+
     _logger.info(f"Listening on 0.0.0.0:{cfg['port']}")
 
     # Run FastAPI
@@ -138,6 +141,7 @@ async def main() -> None:
         await server.serve()
     finally:
         await lifecycle.stop_all()
+        registry.stop_plugin_cleanup_task()
         _logger.info("Sijba stopped")
 
 

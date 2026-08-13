@@ -249,6 +249,35 @@ async def _handle_plugin_reply(msg: dict) -> None:
         _logger.warning(f"transcript append (plugin reply) failed: {exc}")
 
 
+async def _handle_plugin_reply_chunk(msg: dict) -> None:
+    """Route a {"type": "reply_chunk"} streaming delta straight to any
+    connected web/app client via SSE — never persisted, the final {"type":
+    "reply"} carries the authoritative full text into the transcript."""
+    import core.registry as registry
+
+    envelope_id = msg.get("envelope_id")
+    channel_id = msg.get("channel")
+    text = msg.get("text", "")
+    if not envelope_id or not text:
+        return
+
+    ctx = registry.peek_pending_reply(envelope_id)
+    if ctx is None:
+        return
+    source = ctx.get("source") or "plugin"
+    if source not in ("web", "app"):
+        return
+
+    state.broadcast_reply({
+        "type": "reply_chunk",
+        "text": text,
+        "parent_id": ctx.get("parent_id") or envelope_id,
+        "handler_id": f"plugin:{channel_id}",
+        "source_meta": ctx.get("source_meta") or {},
+        "channel": ctx.get("channel") or channel_id or "pipeline",
+    })
+
+
 @app.websocket("/api/plugin/ws")
 async def plugin_ws(websocket: WebSocket):
     """Persistent connection for external plugins (Cursor, Claude, ...).
@@ -260,7 +289,8 @@ async def plugin_ws(websocket: WebSocket):
       server -> client: {"type": "registered", "plugin_id"}
       server -> client: {"type": "channel_registered", "channel_id", "ok"}  (per channel)
       server -> client: {"type": "message", "channel", "payload": {...}}    (routed message)
-      client -> server: {"type": "reply", "channel", "envelope_id", "text", "continue"}
+      client -> server: {"type": "reply_chunk", "channel", "envelope_id", "text"} (0+, streamed)
+      client -> server: {"type": "reply", "channel", "envelope_id", "text", "continue"} (final, once)
       either direction:  {"type": "ping"} / {"type": "pong"}                (heartbeat)
     """
     import core.registry as registry
@@ -299,6 +329,11 @@ async def plugin_ws(websocket: WebSocket):
                 if plugin_id:
                     registry.plugin_heartbeat(plugin_id)
                 await _handle_plugin_reply(msg)
+
+            elif mtype == "reply_chunk":
+                if plugin_id:
+                    registry.plugin_heartbeat(plugin_id)
+                await _handle_plugin_reply_chunk(msg)
 
             elif mtype in ("ping", "pong"):
                 if plugin_id:

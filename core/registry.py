@@ -38,6 +38,7 @@ class PluginConnection:
 
 _plugins: Dict[str, PluginConnection] = {}
 _channel_to_plugin: Dict[str, str] = {}
+_pending_replies: Dict[str, Dict[str, Any]] = {}
 _plugin_cleanup_task: Optional[asyncio.Task] = None
 _cleanup_interval = 30.0  # seconds
 _plugin_timeout = 60.0    # seconds
@@ -134,8 +135,17 @@ def list_plugin_channels() -> List[Dict[str, Any]]:
     return result
 
 
-async def send_to_channel(channel_id: str, payload: Dict[str, Any]) -> bool:
-    """Send a message to a plugin channel via WebSocket."""
+async def send_to_channel(
+    channel_id: str,
+    payload: Dict[str, Any],
+    reply_context: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Send a message to a plugin channel via WebSocket.
+
+    `reply_context` (source/source_meta/transcript channel/parent_id) is
+    stashed keyed by payload["envelope_id"] so the eventual {"type": "reply"}
+    from the plugin can be routed back to the right web/app client + transcript.
+    """
     plugin_id = _channel_to_plugin.get(channel_id)
     if not plugin_id or plugin_id not in _plugins:
         return False
@@ -147,10 +157,17 @@ async def send_to_channel(channel_id: str, payload: Dict[str, Any]) -> bool:
             "payload": payload,
         })
         conn.last_seen = _now()
+        if reply_context is not None:
+            _pending_replies[payload["envelope_id"]] = reply_context
         return True
     except Exception as exc:
         _logger.warning(f"Failed to send to channel {channel_id}: {exc}")
         return False
+
+
+def pop_pending_reply(envelope_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve and clear the reply context stashed by send_to_channel()."""
+    return _pending_replies.pop(envelope_id, None)
 
 
 async def _cleanup_dead_plugins() -> None:

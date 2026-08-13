@@ -194,6 +194,130 @@ async def get_queue():
     return queue.depths()
 
 
+@app.get("/api/plugin/channels", dependencies=[Depends(_check_auth)])
+async def list_plugin_channels():
+    import core.registry as registry
+
+    return registry.list_plugin_channels()
+
+
+async def _handle_plugin_reply(msg: dict) -> None:
+    """Route a {"type": "reply"} message from a plugin WebSocket back to
+    whoever sent the original message — mirrors the `respond` handling in
+    pipeline._run() for regular handlers."""
+    import core.registry as registry
+
+    envelope_id = msg.get("envelope_id")
+    channel_id = msg.get("channel")
+    text = msg.get("text", "")
+    handler_id = f"plugin:{channel_id}"
+
+    ctx = registry.pop_pending_reply(envelope_id) if envelope_id else None
+    if ctx is None:
+        _logger.warning(f"plugin reply for unknown envelope_id={envelope_id!r} (channel={channel_id})")
+        ctx = {}
+    source = ctx.get("source") or "plugin"
+    source_meta = ctx.get("source_meta") or {}
+    transcript_channel = ctx.get("channel") or channel_id or "pipeline"
+    parent_id = ctx.get("parent_id") or envelope_id
+
+    if source in ("web", "app"):
+        state.broadcast_reply({
+            "type": "reply",
+            "text": text,
+            "parent_id": parent_id,
+            "handler_id": handler_id,
+            "source_meta": source_meta,
+            "channel": transcript_channel,
+        })
+
+    try:
+        import core.transcript as transcript
+
+        chat_id = source_meta.get("chat_id")
+        if chat_id and text:
+            transcript.append(
+                chat_id=str(chat_id),
+                channel=transcript_channel,
+                role="bot",
+                text=text,
+                handler_id=handler_id,
+                envelope_id=envelope_id,
+                source=source,
+            )
+    except Exception as exc:
+        _logger.warning(f"transcript append (plugin reply) failed: {exc}")
+
+
+@app.websocket("/api/plugin/ws")
+async def plugin_ws(websocket: WebSocket):
+    """Persistent connection for external plugins (Cursor, Claude, ...).
+
+    Protocol (JSON messages, both directions):
+      client -> server: {"type": "register", "plugin_id", "capabilities",
+                          "channels": {channel_id: {label, hint, triggers,
+                                                     capabilities, metadata}, ...}}
+      server -> client: {"type": "registered", "plugin_id"}
+      server -> client: {"type": "channel_registered", "channel_id", "ok"}  (per channel)
+      server -> client: {"type": "message", "channel", "payload": {...}}    (routed message)
+      client -> server: {"type": "reply", "channel", "envelope_id", "text", "continue"}
+      either direction:  {"type": "ping"} / {"type": "pong"}                (heartbeat)
+    """
+    import core.registry as registry
+
+    token = websocket.query_params.get("token")
+    if _auth_token and token != _auth_token:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept()
+    plugin_id: Optional[str] = None
+
+    async def _ping_loop() -> None:
+        while True:
+            await asyncio.sleep(20)
+            await websocket.send_json({"type": "ping"})
+
+    ping_task = asyncio.create_task(_ping_loop())
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            mtype = msg.get("type")
+
+            if mtype == "register":
+                plugin_id = (msg.get("plugin_id") or "").strip()
+                if not plugin_id:
+                    await websocket.send_json({"type": "error", "message": "plugin_id required"})
+                    continue
+                registry.plugin_register(plugin_id, websocket, msg.get("capabilities"))
+                await websocket.send_json({"type": "registered", "plugin_id": plugin_id})
+                for ch_id, ch_cfg in (msg.get("channels") or {}).items():
+                    ok = registry.plugin_register_channel(plugin_id, ch_id, ch_cfg or {})
+                    await websocket.send_json({"type": "channel_registered", "channel_id": ch_id, "ok": ok})
+
+            elif mtype == "reply":
+                if plugin_id:
+                    registry.plugin_heartbeat(plugin_id)
+                await _handle_plugin_reply(msg)
+
+            elif mtype in ("ping", "pong"):
+                if plugin_id:
+                    registry.plugin_heartbeat(plugin_id)
+                if mtype == "ping":
+                    await websocket.send_json({"type": "pong"})
+
+            else:
+                _logger.warning(f"plugin_ws: unknown message type {mtype!r} from {plugin_id}")
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        _logger.warning(f"plugin_ws error (plugin_id={plugin_id}): {exc}")
+    finally:
+        ping_task.cancel()
+        if plugin_id:
+            registry.plugin_unregister(plugin_id)
+
+
 @app.get("/api/logs", dependencies=[Depends(_check_auth)])
 async def stream_logs(request: Request):
     """SSE endpoint: streams log entries as JSON."""

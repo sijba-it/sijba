@@ -44,7 +44,9 @@ _cleanup_interval = 30.0  # seconds
 _plugin_timeout = 60.0    # seconds
 
 
-async def _broadcast_channel_status(channel_id: str, status: str, plugin_id: str = None) -> None:
+async def _broadcast_channel_status(
+    channel_id: str, status: str, plugin_id: str = None, metadata: Dict[str, Any] = None
+) -> None:
     """Broadcast channel status change to all SSE reply clients."""
     event = {
         "type": "channel_status",
@@ -53,6 +55,8 @@ async def _broadcast_channel_status(channel_id: str, status: str, plugin_id: str
     }
     if plugin_id:
         event["plugin_id"] = plugin_id
+    if metadata is not None:
+        event["metadata"] = metadata
     # Reuse existing reply broadcast mechanism
     state.broadcast_reply(event)
 
@@ -90,6 +94,20 @@ def plugin_register_channel(plugin_id: str, channel_id: str, config: Dict[str, A
     conn.last_seen = _now()
     asyncio.create_task(_broadcast_channel_status(channel_id, "healthy", plugin_id))
     _logger.info(f"Channel registered: {channel_id} (plugin={plugin_id})")
+    return True
+
+
+def plugin_update_channel(plugin_id: str, channel_id: str, metadata_patch: Dict[str, Any]) -> bool:
+    """Merge a metadata patch into a registered channel (e.g. current model,
+    context size after a turn) and notify listeners — without a full
+    re-registration."""
+    conn = _plugins.get(plugin_id)
+    if not conn or channel_id not in conn.channels:
+        return False
+    cfg = conn.channels[channel_id]
+    cfg["metadata"] = {**cfg.get("metadata", {}), **metadata_patch}
+    conn.last_seen = _now()
+    asyncio.create_task(_broadcast_channel_status(channel_id, "healthy", plugin_id, cfg["metadata"]))
     return True
 
 

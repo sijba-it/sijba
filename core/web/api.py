@@ -298,6 +298,7 @@ async def plugin_ws(websocket: WebSocket):
       server -> client: {"type": "message", "channel", "payload": {...}}    (routed message)
       client -> server: {"type": "reply_chunk", "channel", "envelope_id", "text"} (0+, streamed)
       client -> server: {"type": "reply", "channel", "envelope_id", "text", "continue"} (final, once)
+      client -> server: {"type": "channel_update", "channel_id", "metadata"}  (merged into channel metadata)
       either direction:  {"type": "ping"} / {"type": "pong"}                (heartbeat)
     """
     import core.registry as registry
@@ -343,6 +344,14 @@ async def plugin_ws(websocket: WebSocket):
                 if plugin_id:
                     registry.plugin_heartbeat(plugin_id)
                 await _handle_plugin_reply_chunk(msg)
+
+            elif mtype == "channel_update":
+                if plugin_id:
+                    registry.plugin_heartbeat(plugin_id)
+                    ch_id = msg.get("channel_id")
+                    patch = msg.get("metadata") or {}
+                    if ch_id:
+                        registry.plugin_update_channel(plugin_id, ch_id, patch)
 
             elif mtype in ("ping", "pong"):
                 if plugin_id:

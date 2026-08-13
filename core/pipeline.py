@@ -273,6 +273,33 @@ async def _run(
 # Public entry points
 # ------------------------------------------------------------------
 
+async def _route_to_plugin_channel(ch: dict, envelope: dict) -> bool:
+    """Send `envelope` to a registered plugin channel and stash reply context
+    so the eventual {"type": "reply"} from the plugin can be routed back to
+    the originating web/app client and the right transcript channel."""
+    pipeline_text = envelope.get("pipeline_text") or envelope.get("text", "")
+    payload = {
+        "envelope_id": envelope["id"],
+        "text": pipeline_text,
+        "source": envelope.get("source"),
+        "source_meta": envelope.get("source_meta", {}),
+        "context": envelope.get("context", {}),
+        "channel_metadata": ch.get("metadata", {}),
+    }
+    reply_context = {
+        "source": envelope.get("source"),
+        "source_meta": envelope.get("source_meta", {}),
+        "channel": envelope.get("_transcript_channel") or "pipeline",
+        "parent_id": envelope["id"],
+    }
+    sent = await registry.send_to_channel(ch["channel_id"], payload, reply_context)
+    if sent:
+        envelope["handlers_visited"] = envelope.get("handlers_visited", [])
+        envelope["handlers_visited"].append(f"plugin:{ch['channel_id']}")
+        _logger.info(f"Routed to plugin channel: {ch['channel_id']}")
+    return sent
+
+
 async def process_inbound(envelope: dict) -> None:
     src = envelope.get("source", "?")
     text = (envelope.get("pipeline_text") or "")[:80]
@@ -300,7 +327,18 @@ async def process_inbound(envelope: dict) -> None:
             _logger.warning(f"transcript append (user) failed: {exc}")
 
     if target:
-        # API / web direct target — no allow_direct_inject gate (explicit user choice)
+        # API / web direct target — no allow_direct_inject gate (explicit user choice).
+        # Plugin channels (Cursor, Claude, ...) take priority since their ids live in
+        # the registry, not state.handlers.
+        plugin_ch = next(
+            (c for c in registry.list_plugin_channels() if c["channel_id"] == target),
+            None,
+        )
+        if plugin_ch:
+            if not await _route_to_plugin_channel(plugin_ch, envelope):
+                _logger.error(f"Inject target '{target}' (plugin channel) send failed — discarding")
+            return
+
         target_handlers = _resolve_inject_target(target, require_allow_direct=False)
         if target_handlers is None:
             return
@@ -310,26 +348,11 @@ async def process_inbound(envelope: dict) -> None:
 
     # Check plugin channels for trigger match
     pipeline_text = envelope.get("pipeline_text") or envelope.get("text", "")
-    plugin_channels = registry.list_plugin_channels()
-    for ch in plugin_channels:
+    for ch in registry.list_plugin_channels():
         triggers = ch.get("triggers", [])
-        for trigger in triggers:
-            if pipeline_text.lower().startswith(trigger.lower()):
-                # Match! Send to plugin channel
-                payload = {
-                    "envelope_id": envelope["id"],
-                    "text": pipeline_text,
-                    "source": envelope.get("source"),
-                    "source_meta": envelope.get("source_meta", {}),
-                    "context": envelope.get("context", {}),
-                    "channel_metadata": ch.get("metadata", {}),
-                }
-                sent = await registry.send_to_channel(ch["channel_id"], payload)
-                if sent:
-                    envelope["handlers_visited"] = envelope.get("handlers_visited", [])
-                    envelope["handlers_visited"].append(f"plugin:{ch['channel_id']}")
-                    _logger.info(f"Routed to plugin channel: {ch['channel_id']}")
-                    return  # Plugin takes over
+        if any(pipeline_text.lower().startswith(t.lower()) for t in triggers):
+            if await _route_to_plugin_channel(ch, envelope):
+                return  # Plugin takes over
 
     await _run("inbound", envelope)
 

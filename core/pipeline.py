@@ -296,7 +296,12 @@ async def _route_to_plugin_channel(ch: dict, envelope: dict) -> bool:
     if sent:
         envelope["handlers_visited"] = envelope.get("handlers_visited", [])
         envelope["handlers_visited"].append(f"plugin:{ch['channel_id']}")
-        _logger.info(f"Routed to plugin channel: {ch['channel_id']}")
+        _logger.info(
+            f"Routed to plugin channel: {ch['channel_id']} "
+            f"envelope={envelope['id']} text={pipeline_text[:120]!r}"
+        )
+    else:
+        _logger.warning(f"Plugin channel {ch['channel_id']} unreachable — send_to_channel failed")
     return sent
 
 

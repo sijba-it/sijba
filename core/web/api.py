@@ -221,6 +221,11 @@ async def _handle_plugin_reply(msg: dict) -> None:
     transcript_channel = ctx.get("channel") or channel_id or "pipeline"
     parent_id = ctx.get("parent_id") or envelope_id
 
+    _logger.info(
+        f"[plugin:{channel_id}] reply ({len(text)} chars) for envelope={envelope_id} "
+        f"source={source} channel={transcript_channel}"
+    )
+
     if source in ("web", "app"):
         state.broadcast_reply({
             "type": "reply",
@@ -268,6 +273,8 @@ async def _handle_plugin_reply_chunk(msg: dict) -> None:
     if source not in ("web", "app"):
         return
 
+    _logger.info(f"[plugin:{channel_id}] chunk +{len(text)} chars for envelope={envelope_id}")
+
     state.broadcast_reply({
         "type": "reply_chunk",
         "text": text,
@@ -297,10 +304,12 @@ async def plugin_ws(websocket: WebSocket):
 
     token = websocket.query_params.get("token")
     if _auth_token and token != _auth_token:
+        _logger.warning(f"plugin_ws: rejected connection from {websocket.client} — bad/missing token")
         await websocket.close(code=4401)
         return
 
     await websocket.accept()
+    _logger.info(f"plugin_ws: connected from {websocket.client}, awaiting registration")
     plugin_id: Optional[str] = None
 
     async def _ping_loop() -> None:
@@ -344,7 +353,7 @@ async def plugin_ws(websocket: WebSocket):
             else:
                 _logger.warning(f"plugin_ws: unknown message type {mtype!r} from {plugin_id}")
     except WebSocketDisconnect:
-        pass
+        _logger.info(f"plugin_ws: disconnected (plugin_id={plugin_id})")
     except Exception as exc:
         _logger.warning(f"plugin_ws error (plugin_id={plugin_id}): {exc}")
     finally:

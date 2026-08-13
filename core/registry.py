@@ -170,6 +170,13 @@ def pop_pending_reply(envelope_id: str) -> Optional[Dict[str, Any]]:
     return _pending_replies.pop(envelope_id, None)
 
 
+def peek_pending_reply(envelope_id: str) -> Optional[Dict[str, Any]]:
+    """Like pop_pending_reply() but leaves it in place — for streamed
+    reply_chunk messages, where more chunks (and the final reply) are
+    still to come for the same envelope_id."""
+    return _pending_replies.get(envelope_id)
+
+
 async def _cleanup_dead_plugins() -> None:
     """Background task: remove plugins that missed heartbeats."""
     while True:

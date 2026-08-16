@@ -30,12 +30,26 @@ reply_queues: Set[asyncio.Queue] = set()
 
 
 def broadcast_reply(event: Dict[str, Any]) -> None:
-    """Fan-out a reply event to all connected /api/replies SSE clients."""
-    dead = []
+    """Fan-out a reply event to all connected /api/replies SSE clients.
+
+    On a full queue, drop the oldest pending event and keep the client
+    subscribed rather than discarding the queue outright — the /api/replies
+    generator (web/api.py) holds its own reference to this same queue object
+    and keeps awaiting it regardless, so discarding it here only stops future
+    broadcasts from reaching that client while its SSE connection stays open
+    (ping-only) until the browser/app is manually reloaded. Dropping the
+    oldest instead means a slow/backgrounded client loses stale messages but
+    stays live for new ones, with no silent black hole.
+    """
     for q in reply_queues:
         try:
             q.put_nowait(event)
         except asyncio.QueueFull:
-            dead.append(q)
-    for q in dead:
-        reply_queues.discard(q)
+            try:
+                q.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                pass

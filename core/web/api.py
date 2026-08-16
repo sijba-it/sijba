@@ -419,6 +419,40 @@ async def stream_replies(request: Request):
     return EventSourceResponse(_generator())
 
 
+@app.websocket("/api/ws/replies")
+async def ws_replies(websocket: WebSocket):
+    """WebSocket variant of /api/replies for web/app clients.
+
+    Same fan-out (state.reply_queues) and same JSON event shapes as the SSE
+    endpoint — this is an additional transport, not a replacement. A native
+    WebSocket gets protocol-level close/error signaling that a hand-rolled
+    HTTP streaming client can't rely on (no silent-stale-connection class of
+    bug), at the cost of needing a WS-capable client library instead of
+    plain http.
+    """
+    token = websocket.query_params.get("token")
+    if _auth_token and token != _auth_token:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept()
+    q: asyncio.Queue = asyncio.Queue(maxsize=200)
+    state.reply_queues.add(q)
+    try:
+        while True:
+            try:
+                entry = await asyncio.wait_for(q.get(), timeout=15.0)
+                await websocket.send_text(json.dumps(entry))
+            except asyncio.TimeoutError:
+                await websocket.send_text(json.dumps({"ping": True}))
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        _logger.warning(f"ws_replies error: {exc}")
+    finally:
+        state.reply_queues.discard(q)
+
+
 @app.get("/api/transcript", dependencies=[Depends(_check_auth)])
 async def get_transcript(
     chat_id: str,

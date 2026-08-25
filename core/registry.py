@@ -38,10 +38,17 @@ class PluginConnection:
 
 _plugins: Dict[str, PluginConnection] = {}
 _channel_to_plugin: Dict[str, str] = {}
+# envelope_id -> {
+#   reply_context, channel_id, payload, sent_at, redeliveries
+# }
+# Kept until the plugin's final {"type":"reply"} so a reconnect can
+# redeliver turns that never got an answer (WS drop mid-stream).
 _pending_replies: Dict[str, Dict[str, Any]] = {}
 _plugin_cleanup_task: Optional[asyncio.Task] = None
 _cleanup_interval = 30.0  # seconds
 _plugin_timeout = 60.0    # seconds
+_pending_max_redeliveries = 3
+_pending_ttl_seconds = 3600.0
 
 
 async def _broadcast_channel_status(
@@ -107,6 +114,9 @@ def plugin_register_channel(plugin_id: str, channel_id: str, config: Dict[str, A
     conn.last_seen = _now()
     asyncio.create_task(_broadcast_channel_status(channel_id, "healthy", plugin_id))
     _logger.info(f"Channel registered: {channel_id} (plugin={plugin_id})")
+    # Re-send any unanswered turns for this channel (WS drop mid-stream,
+    # or messages that arrived while the plugin was offline).
+    asyncio.create_task(redeliver_pending_for_channel(channel_id))
     return True
 
 
@@ -166,6 +176,35 @@ def list_plugin_channels() -> List[Dict[str, Any]]:
     return result
 
 
+def _stash_pending(
+    channel_id: str,
+    payload: Dict[str, Any],
+    reply_context: Dict[str, Any],
+) -> None:
+    eid = payload.get("envelope_id")
+    if not eid:
+        return
+    # Don't reset redelivery count if we're refreshing an existing entry
+    # (e.g. pipeline retried the same envelope).
+    existing = _pending_replies.get(eid)
+    _pending_replies[eid] = {
+        "reply_context": reply_context,
+        "channel_id": channel_id,
+        "payload": payload,
+        "sent_at": (existing or {}).get("sent_at", _now()),
+        "redeliveries": (existing or {}).get("redeliveries", 0),
+    }
+
+
+def _reply_context_of(entry: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if entry is None:
+        return None
+    # New shape has an explicit reply_context; old shape *was* the context.
+    if "reply_context" in entry and "channel_id" in entry:
+        return entry["reply_context"]
+    return entry
+
+
 async def send_to_channel(
     channel_id: str,
     payload: Dict[str, Any],
@@ -174,11 +213,18 @@ async def send_to_channel(
     """Send a message to a plugin channel via WebSocket.
 
     `reply_context` (source/source_meta/transcript channel/parent_id) is
-    stashed keyed by payload["envelope_id"] so the eventual {"type": "reply"}
-    from the plugin can be routed back to the right web/app client + transcript.
+    stashed keyed by payload["envelope_id"] until the plugin's final reply,
+    so a reconnect can redeliver turns that never completed.
     """
+    if reply_context is not None:
+        _stash_pending(channel_id, payload, reply_context)
+
     plugin_id = _channel_to_plugin.get(channel_id)
     if not plugin_id or plugin_id not in _plugins:
+        _logger.warning(
+            f"Channel {channel_id} offline — envelope="
+            f"{payload.get('envelope_id')} queued for redelivery"
+        )
         return False
     conn = _plugins[plugin_id]
     try:
@@ -188,28 +234,69 @@ async def send_to_channel(
             "payload": payload,
         })
         conn.last_seen = _now()
-        if reply_context is not None:
-            _pending_replies[payload["envelope_id"]] = reply_context
         return True
     except Exception as exc:
         _logger.warning(f"Failed to send to channel {channel_id}: {exc}")
         return False
 
 
+async def redeliver_pending_for_channel(channel_id: str) -> int:
+    """Re-send unanswered envelopes for `channel_id` (after reconnect)."""
+    plugin_id = _channel_to_plugin.get(channel_id)
+    if not plugin_id or plugin_id not in _plugins:
+        return 0
+    conn = _plugins[plugin_id]
+    now = _now()
+    sent = 0
+    for eid, entry in list(_pending_replies.items()):
+        if entry.get("channel_id") != channel_id:
+            continue
+        if "payload" not in entry:
+            continue  # old-shape entry without payload — can't redeliver
+        age = now - float(entry.get("sent_at") or now)
+        if age > _pending_ttl_seconds:
+            _logger.warning(f"Dropping expired pending envelope={eid} ({age:.0f}s old)")
+            _pending_replies.pop(eid, None)
+            continue
+        attempts = int(entry.get("redeliveries") or 0)
+        if attempts >= _pending_max_redeliveries:
+            _logger.warning(
+                f"Dropping pending envelope={eid} after {attempts} redeliveries"
+            )
+            _pending_replies.pop(eid, None)
+            continue
+        try:
+            await conn.ws.send_json({
+                "type": "message",
+                "channel": channel_id,
+                "payload": entry["payload"],
+            })
+            entry["redeliveries"] = attempts + 1
+            sent += 1
+            _logger.info(
+                f"Redelivered envelope={eid} to {channel_id} "
+                f"(attempt {entry['redeliveries']})"
+            )
+        except Exception as exc:
+            _logger.warning(f"Redeliver envelope={eid} to {channel_id} failed: {exc}")
+            break
+    return sent
+
+
 def pop_pending_reply(envelope_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve and clear the reply context stashed by send_to_channel()."""
-    return _pending_replies.pop(envelope_id, None)
+    return _reply_context_of(_pending_replies.pop(envelope_id, None))
 
 
 def peek_pending_reply(envelope_id: str) -> Optional[Dict[str, Any]]:
     """Like pop_pending_reply() but leaves it in place — for streamed
     reply_chunk messages, where more chunks (and the final reply) are
     still to come for the same envelope_id."""
-    return _pending_replies.get(envelope_id)
+    return _reply_context_of(_pending_replies.get(envelope_id))
 
 
 async def _cleanup_dead_plugins() -> None:
-    """Background task: remove plugins that missed heartbeats."""
+    """Background task: remove plugins that missed heartbeats; expire stale pendings."""
     while True:
         await asyncio.sleep(_cleanup_interval)
         now = _now()
@@ -219,6 +306,12 @@ async def _cleanup_dead_plugins() -> None:
                 dead.append((pid, conn.ws))
         for pid, ws in dead:
             plugin_unregister(pid, ws)
+        # Drop unanswered envelopes that will never be redelivered usefully.
+        for eid, entry in list(_pending_replies.items()):
+            sent_at = float(entry.get("sent_at") or now)
+            if now - sent_at > _pending_ttl_seconds:
+                _pending_replies.pop(eid, None)
+                _logger.warning(f"Expired pending envelope={eid}")
 
 
 def start_plugin_cleanup_task() -> None:

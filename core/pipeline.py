@@ -285,6 +285,7 @@ async def _route_to_plugin_channel(ch: dict, envelope: dict) -> bool:
         "source_meta": envelope.get("source_meta", {}),
         "context": envelope.get("context", {}),
         "channel_metadata": ch.get("metadata", {}),
+        "attachments": (envelope.get("metadata") or {}).get("attachments", []),
     }
     reply_context = {
         "source": envelope.get("source"),

@@ -6,9 +6,9 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status, WebSocket, WebSocketDisconnect, Query
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse
 
@@ -34,14 +34,19 @@ _auth_token: Optional[str] = None
 _webhook_token: Optional[str] = None
 _config_dir: Optional[Path] = None
 _reload_fn = None  # injected by main.py
+_upload_dir: Optional[Path] = None
+
+# PVC is small (1Gi) and this is a single-user instance — keep uploads modest.
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
-def configure(auth_token: str, webhook_token: str, config_dir: Path, reload_fn) -> None:
-    global _auth_token, _webhook_token, _config_dir, _reload_fn
+def configure(auth_token: str, webhook_token: str, config_dir: Path, reload_fn, upload_dir: Path) -> None:
+    global _auth_token, _webhook_token, _config_dir, _reload_fn, _upload_dir
     _auth_token = auth_token
     _webhook_token = webhook_token
     _config_dir = config_dir
     _reload_fn = reload_fn
+    _upload_dir = upload_dir
 
 
 # ------------------------------------------------------------------
@@ -475,21 +480,69 @@ async def get_transcript(
     }
 
 
+@app.post("/api/upload", dependencies=[Depends(_check_auth)])
+async def upload_file(file: UploadFile = File(...)):
+    file_id = str(uuid.uuid4())
+    dest_dir = _upload_dir / file_id
+    dest_dir.mkdir(parents=True)
+    filename = Path(file.filename or "file").name  # strip any path components
+    dest = dest_dir / filename
+    size = 0
+    try:
+        with dest.open("wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"file too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)}MB)",
+                    )
+                f.write(chunk)
+    except HTTPException:
+        import shutil
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise
+    _logger.info(f"upload: {file_id} {filename!r} ({size} bytes)")
+    return {
+        "id": file_id,
+        "filename": filename,
+        "content_type": file.content_type,
+        "size": size,
+        "url": f"/api/upload/{file_id}",
+    }
+
+
+@app.get("/api/upload/{file_id}", dependencies=[Depends(_check_auth)])
+async def download_file(file_id: str):
+    try:
+        uuid.UUID(file_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="not found")
+    dest_dir = _upload_dir / file_id
+    matches = [p for p in dest_dir.iterdir() if p.is_file()] if dest_dir.is_dir() else []
+    if not matches:
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(matches[0], filename=matches[0].name)
+
+
 @app.post("/api/message", dependencies=[Depends(_check_auth)])
 async def inject_message(request: Request):
     """Inject a message into the inbound pipeline.
 
     Body:
-      text       (required) message text
-      target     (optional) handler id or category — skip full pipeline / match
-      chat_id    (optional) stored in source_meta for context store
-      metadata   (optional) free-form dict
-      source     (optional) defaults to "web"
+      text        message text (required unless attachments given)
+      target      (optional) handler id or category — skip full pipeline / match
+      chat_id     (optional) stored in source_meta for context store
+      metadata    (optional) free-form dict
+      source      (optional) defaults to "web"
+      attachments (optional) list of {id, filename, content_type, size, url}
+                  from /api/upload — stashed in metadata.attachments
     """
     body = await request.json()
     text = body.get("text", "")
-    if not text:
-        raise HTTPException(status_code=400, detail="text required")
+    attachments = body.get("attachments") or []
+    if not text and not attachments:
+        raise HTTPException(status_code=400, detail="text or attachments required")
 
     target = body.get("target") or None
     if target is not None:
@@ -503,6 +556,10 @@ async def inject_message(request: Request):
     # Stable default so browsers share one transcript
     source_meta.setdefault("chat_id", "web")
 
+    metadata = dict(body.get("metadata") or {})
+    if attachments:
+        metadata["attachments"] = attachments
+
     envelope = {
         "id": str(uuid.uuid4()),
         "parent_id": None,
@@ -512,7 +569,7 @@ async def inject_message(request: Request):
         "text": text,
         "pipeline_text": text,
         "depth": 0,
-        "metadata": body.get("metadata") or {},
+        "metadata": metadata,
     }
     if target:
         # Validated when the inbound worker runs (handler may not be loaded yet)

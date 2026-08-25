@@ -14,6 +14,7 @@ DEFAULTS: Dict[str, Any] = {
     "log_level": "INFO",
     "log_buffer_size": 1000,
     "db_path": "sijba.db",
+    "upload_dir": None,
 }
 
 _cfg: Dict[str, Any] = {}
@@ -37,6 +38,7 @@ def load() -> Dict[str, Any]:
         "SIJBA_WEBHOOK_TOKEN": "webhook_token",
         "SIJBA_PORT": "port",
         "SIJBA_DB_PATH": "db_path",
+        "SIJBA_UPLOAD_DIR": "upload_dir",
         "SIJBA_LOG_LEVEL": "log_level",
     }
     for env_key, cfg_key in env_map.items():

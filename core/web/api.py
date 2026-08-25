@@ -300,9 +300,11 @@ async def plugin_ws(websocket: WebSocket):
                                                      capabilities, metadata}, ...}}
       server -> client: {"type": "registered", "plugin_id"}
       server -> client: {"type": "channel_registered", "channel_id", "ok"}  (per channel)
-      server -> client: {"type": "message", "channel", "payload": {...}}    (routed message)
+      server -> client: {"type": "message", "channel", "payload": {...}}    (routed message;
+                          re-sent on channel re-register if no final reply yet)
       client -> server: {"type": "reply_chunk", "channel", "envelope_id", "text"} (0+, streamed)
-      client -> server: {"type": "reply", "channel", "envelope_id", "text", "continue"} (final, once)
+      client -> server: {"type": "reply", "channel", "envelope_id", "text", "continue"} (final, once;
+                          clears Core's pending redelivery entry)
       client -> server: {"type": "channel_update", "channel_id", "metadata"}  (merged into channel metadata)
       either direction:  {"type": "ping"} / {"type": "pong"}                (heartbeat)
     """

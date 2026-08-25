@@ -320,7 +320,8 @@ async def process_inbound(envelope: dict) -> None:
             import core.transcript as transcript
             chat_id = (envelope.get("source_meta") or {}).get("chat_id")
             body = envelope.get("pipeline_text") or envelope.get("text") or ""
-            if chat_id and body:
+            attachments = (envelope.get("metadata") or {}).get("attachments") or None
+            if chat_id and (body or attachments):
                 transcript.append(
                     chat_id=str(chat_id),
                     channel=channel,
@@ -328,6 +329,7 @@ async def process_inbound(envelope: dict) -> None:
                     text=body,
                     envelope_id=envelope.get("id"),
                     source=src,
+                    attachments=attachments,
                 )
         except Exception as exc:
             _logger.warning(f"transcript append (user) failed: {exc}")

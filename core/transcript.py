@@ -4,6 +4,7 @@ Stores inbound user messages and outbound replies in SQLite (same DB as
 queues/store). Hard-capped per (chat_id, channel) so it cannot grow forever.
 """
 from __future__ import annotations
+import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -39,6 +40,10 @@ def init(db_path: str) -> None:
             source      TEXT
         )
     """)
+    try:
+        _conn.execute("ALTER TABLE transcript ADD COLUMN attachments TEXT")
+    except sqlite3.OperationalError:
+        pass  # already migrated
     _conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_transcript_chat_ch"
         " ON transcript (chat_id, channel, id)"
@@ -85,16 +90,17 @@ def append(
     handler_id: str | None = None,
     envelope_id: str | None = None,
     source: str | None = None,
+    attachments: list | None = None,
 ) -> None:
-    if not chat_id or not text:
+    if not chat_id or not (text or attachments):
         return
     channel = channel or "pipeline"
     role = role if role in ("user", "bot", "sys") else "sys"
     with _lock:
         _conn.execute(
             "INSERT INTO transcript"
-            " (ts, chat_id, channel, role, text, handler_id, envelope_id, source)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            " (ts, chat_id, channel, role, text, handler_id, envelope_id, source, attachments)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 _now(),
                 str(chat_id),
@@ -104,6 +110,7 @@ def append(
                 handler_id,
                 envelope_id,
                 source,
+                json.dumps(attachments) if attachments else None,
             ),
         )
         _prune(str(chat_id), str(channel))
@@ -120,9 +127,9 @@ def list_messages(
     with _lock:
         rows = _conn.execute(
             """
-            SELECT ts, role, text, handler_id, envelope_id, source
+            SELECT ts, role, text, handler_id, envelope_id, source, attachments
             FROM (
-              SELECT ts, role, text, handler_id, envelope_id, source, id
+              SELECT ts, role, text, handler_id, envelope_id, source, attachments, id
               FROM transcript
               WHERE chat_id=? AND channel=?
               ORDER BY id DESC
@@ -140,6 +147,7 @@ def list_messages(
             "handler_id": r[3],
             "envelope_id": r[4],
             "source": r[5],
+            "attachments": json.loads(r[6]) if r[6] else None,
         }
         for r in rows
     ]

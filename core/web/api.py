@@ -373,7 +373,7 @@ async def plugin_ws(websocket: WebSocket):
     finally:
         ping_task.cancel()
         if plugin_id:
-            registry.plugin_unregister(plugin_id)
+            registry.plugin_unregister(plugin_id, websocket)
 
 
 @app.get("/api/logs", dependencies=[Depends(_check_auth)])

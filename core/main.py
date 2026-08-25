@@ -1,8 +1,10 @@
 """Sijba entrypoint: wires all modules together and starts the server."""
 from __future__ import annotations
 import asyncio
+import shutil
 import signal
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -74,6 +76,18 @@ async def main() -> None:
     transcript.init(db_path)
     _logger.info(f"Queue/store DB: {db_path}")
 
+    # Uploads — default next to the DB (persistent volume), not config_dir
+    # (which is a read-only ConfigMap mount in k8s).
+    upload_dir = cfg.get("upload_dir")
+    if not upload_dir:
+        upload_dir = Path(db_path).parent / "uploads"
+    else:
+        upload_dir = Path(upload_dir)
+        if not upload_dir.is_absolute():
+            upload_dir = config_dir / upload_dir
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    _logger.info(f"Upload dir: {upload_dir}")
+
     # Load handlers (files), then merge any dynamic registrations (none at boot)
     import core.registry as registry
 
@@ -100,6 +114,7 @@ async def main() -> None:
         webhook_token=cfg.get("webhook_token"),
         config_dir=config_dir,
         reload_fn=lambda: _do_reload(cfg),
+        upload_dir=upload_dir,
     )
 
     # Start persistent handlers (including sources)
@@ -123,6 +138,24 @@ async def main() -> None:
                 _logger.error(f"registry expire: {exc}")
 
     asyncio.create_task(_expire_loop())
+
+    # Delete uploaded files older than the TTL — self-hosted single-user
+    # instance, so a simple age sweep beats tracking per-file references.
+    UPLOAD_TTL_SECONDS = 3 * 24 * 3600
+
+    async def _upload_cleanup_loop() -> None:
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                cutoff = time.time() - UPLOAD_TTL_SECONDS
+                for d in upload_dir.iterdir():
+                    if d.is_dir() and d.stat().st_mtime < cutoff:
+                        shutil.rmtree(d, ignore_errors=True)
+                        _logger.info(f"upload cleanup: removed {d.name}")
+            except Exception as exc:
+                _logger.error(f"upload cleanup: {exc}")
+
+    asyncio.create_task(_upload_cleanup_loop())
 
     # Start plugin cleanup task
     registry.start_plugin_cleanup_task()

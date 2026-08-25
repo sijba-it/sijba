@@ -70,12 +70,25 @@ def plugin_register(plugin_id: str, ws: Any, capabilities: Dict[str, Any] = None
     return conn
 
 
-def plugin_unregister(plugin_id: str) -> bool:
-    """Unregister a plugin and all its channels."""
+def plugin_unregister(plugin_id: str, ws: Any = None) -> bool:
+    """Unregister a plugin and all its channels.
+
+    `ws` (when given) must match the currently-registered connection's own
+    websocket, or this is a no-op. Without it: a reconnecting plugin uses
+    the same deterministic plugin_id (e.g. "cursor-Recherche") every time,
+    so the *old* connection's disconnect handler racing after the *new*
+    one has already re-registered would otherwise pop the new entry out
+    from under it by id alone — verified live, a burst of reconnects (a
+    controller restart cycling all its children) silently dropped an
+    otherwise-healthy, freshly (re-)registered channel from the registry.
+    """
     global _plugins, _channel_to_plugin
-    conn = _plugins.pop(plugin_id, None)
+    conn = _plugins.get(plugin_id)
     if not conn:
         return False
+    if ws is not None and conn.ws is not ws:
+        return False
+    del _plugins[plugin_id]
     for ch_id in list(conn.channels.keys()):
         _channel_to_plugin.pop(ch_id, None)
         asyncio.create_task(_broadcast_channel_status(ch_id, "unavailable", plugin_id))
@@ -203,9 +216,9 @@ async def _cleanup_dead_plugins() -> None:
         dead = []
         for pid, conn in list(_plugins.items()):
             if now - conn.last_seen > _plugin_timeout:
-                dead.append(pid)
-        for pid in dead:
-            plugin_unregister(pid)
+                dead.append((pid, conn.ws))
+        for pid, ws in dead:
+            plugin_unregister(pid, ws)
 
 
 def start_plugin_cleanup_task() -> None:

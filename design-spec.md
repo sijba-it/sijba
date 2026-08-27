@@ -1,6 +1,13 @@
 # SIJBA — Simple JSON Bus Assistant
 ## Complete Design Specification
 
+> **Historical document.** This is the original design, not a description of
+> the current implementation. Parts of it were never built (`type: docker`)
+> and parts were built and later removed as unused (`exec_raw`,
+> `capture_stdout`, `stdin` templating, `privileged`, persistent `type: http`).
+> For what the core actually does today, see [docs/](docs/) and
+> [schema/handler.schema.json](schema/handler.schema.json).
+
 ---
 
 ## Overview

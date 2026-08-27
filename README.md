@@ -75,7 +75,7 @@ One `.json` file per handler in `handlers/`. Filename prefix sets the sort prior
 }
 ```
 
-Key fields: `direction` (`inbound`/`outbound`/`source`), `lifecycle` (`per_message`/`persistent`), `type` (`exec_json`/`exec_raw`/`http`/`docker`).
+Key fields: `direction` (`inbound`/`outbound`/`source`), `lifecycle` (`per_message`/`persistent`), `type` (`exec_json`/`http`).
 
 See `schema/handler.schema.json` for the full schema and `examples/handlers/` for ready-to-use configs.
 
@@ -85,10 +85,9 @@ See `schema/handler.schema.json` for the full schema and `examples/handlers/` fo
 
 | Type | Lifecycle | Description |
 |------|-----------|-------------|
-| `exec_raw` | per_message | Any binary. Exit 0 = continue, exit 1 = stop. |
 | `exec_json` | per_message | JSON envelope via stdin, JSON response via stdout. |
-| `http` | persistent | Long-running HTTP/socket service. Core POSTs envelope, reads response. |
-| `docker` | persistent | SIJBA starts/stops the container. Communication via `http`. |
+| `exec_json` | persistent | Long-running process, NDJSON over stdin/stdout. Also used by `source` handlers. |
+| `http` | per_message | Core POSTs the envelope to a remote URL. Used by `/api/register` (see [api.md](docs/api.md)). |
 
 ---
 

@@ -1,0 +1,18 @@
+# Runs the test suite inside the build, so `docker build -f Dockerfile.test .`
+# fails when a test fails. Uses the build context rather than a bind mount, so
+# it works the same whether or not Jenkins itself runs in a container.
+FROM docker.io/library/python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements-dev.txt
+
+COPY pytest.ini ./
+COPY core/ core/
+COPY schema/ schema/
+COPY plugins-builtin/ plugins-builtin/
+COPY tests/ tests/
+
+RUN python -m pyflakes core/ tests/
+RUN python -m pytest -q

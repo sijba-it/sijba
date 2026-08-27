@@ -1,0 +1,28 @@
+# Keep the build context small — it is sent to the daemon on every build.
+.venv/
+venv/
+.git/
+.gitignore
+# ** is required — a bare __pycache__/ only matches the context root
+**/__pycache__/
+**/*.py[cod]
+**/*.pyo
+.pytest_cache/
+
+# Local runtime artefacts
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+sijba.log
+.env
+.env.*
+
+# Editor / tooling
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+*~
+.DS_Store

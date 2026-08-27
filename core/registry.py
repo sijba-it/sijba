@@ -172,6 +172,29 @@ def list_plugin_channels() -> List[Dict[str, Any]]:
     ]
 
 
+def channel_routing_targets() -> List[Dict[str, Any]]:
+    """Plugin channels described the way a router has to address them.
+
+    `id` is the channel's *trigger*, not its channel_id, because that is what
+    a router must emit: the reply is re-injected as a normal message and
+    picked up by the trigger match in pipeline.process_inbound. Prefer an
+    "@"-prefixed trigger — that is what the UI inserts and what plugins
+    register as their canonical mention.
+    """
+    targets = []
+    for conn in _plugins.values():
+        for ch_id, cfg in conn.channels.items():
+            triggers = cfg.get("triggers") or []
+            trigger = next((t for t in triggers if t.startswith("@")), None)
+            if trigger is None:
+                trigger = triggers[0] if triggers else ch_id
+            targets.append({
+                "id": trigger,
+                "router_hint": cfg.get("hint") or cfg.get("label") or ch_id,
+            })
+    return targets
+
+
 def _stash_pending(
     channel_id: str,
     payload: Dict[str, Any],
@@ -281,6 +304,18 @@ def peek_pending_reply(envelope_id: str) -> Optional[Dict[str, Any]]:
     still to come for the same envelope_id."""
     entry = _pending_replies.get(envelope_id)
     return entry["reply_context"] if entry else None
+
+
+def discard_pending(envelope_id: str) -> bool:
+    """Give up on delivering this envelope to its channel.
+
+    A pending entry means "this channel still owes an answer". When the
+    caller reacts to a failed send by handling the message some other way
+    (the pipeline fallback), the channel no longer owes anything — leaving
+    the entry would have the plugin redeliver and answer it a second time
+    after it reconnects.
+    """
+    return _pending_replies.pop(envelope_id, None) is not None
 
 
 async def _cleanup_dead_plugins() -> None:

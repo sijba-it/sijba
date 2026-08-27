@@ -223,3 +223,58 @@ async def test_persistent_handler_without_instance_continues(tmp_path, db):
     resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
 
     assert resp == {"continue": True}
+
+
+# ------------------------------------------------------------------
+# The router must be able to see plugin channels, not just handlers
+# ------------------------------------------------------------------
+
+async def test_router_sees_plugin_channels(tmp_path, db):
+    """Without this the router is blind to Cursor/Claude and can only ever
+    answer "no route" — the channels live in the registry, not state.handlers."""
+    from conftest import register_channel
+
+    register_channel("cursor", "projekt-a", triggers=["projekt-a", "@projekt-a"])
+    h = handler("router", exec=script(tmp_path, "r.py", ROUTER_VIEW),
+                receive_handler_context=True)
+
+    resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
+
+    assert resp["pipeline_text"] == "@projekt-a", \
+        "must be addressed by its @ trigger, which is what re-injection matches"
+
+
+async def test_router_sees_handlers_and_channels_together(tmp_path, db):
+    from conftest import register_channel
+
+    install(handler("pods", router_hint="Kubernetes"))
+    register_channel("cursor", "projekt-a", triggers=["@projekt-a"])
+    h = handler("router", exec=script(tmp_path, "r.py", ROUTER_VIEW),
+                receive_handler_context=True)
+
+    resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
+
+    assert resp["pipeline_text"] == "pods,@projekt-a"
+
+
+async def test_channel_without_at_trigger_falls_back_to_its_id(tmp_path, db):
+    from conftest import register_channel
+
+    register_channel("cursor", "projekt-a", triggers=[])
+    h = handler("router", exec=script(tmp_path, "r.py", ROUTER_VIEW),
+                receive_handler_context=True)
+
+    resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
+
+    assert resp["pipeline_text"] == "projekt-a"
+
+
+async def test_router_is_not_offered_itself_as_a_target(tmp_path, db):
+    """Routing to itself would just loop until max_inject_depth."""
+    install(handler("router", router_hint="I route things"))
+    h = handler("router", exec=script(tmp_path, "r.py", ROUTER_VIEW),
+                receive_handler_context=True)
+
+    resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
+
+    assert resp["pipeline_text"] == ""

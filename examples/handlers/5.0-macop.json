@@ -9,7 +9,6 @@
     "regex": "^macop\\b"
   },
   "continue_on_match": false,
-  "privileged": true,
   "timeout_seconds": 30,
   "env": {
     "SIJBA_CONFIG_DIR": "${SIJBA_CONFIG_DIR}",

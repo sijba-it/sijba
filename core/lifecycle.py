@@ -19,12 +19,9 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
-import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
-
-import httpx
 
 import core.log as log
 import core.state as state
@@ -85,6 +82,14 @@ class PersistentHandler:
         if shared_id:
             return await self._attach_shared(shared_id)
 
+        if self.handler["type"] == "http":
+            _logger.error(
+                f"[{self.hid}] type 'http' cannot be persistent — "
+                "remote handlers are per_message (see registry.register)"
+            )
+            self._set_state("degraded")
+            return False
+
         self._source_callback = source_callback
         self._set_state("starting")
 
@@ -104,26 +109,11 @@ class PersistentHandler:
             return await self._handle_start_failure()
 
         asyncio.create_task(self._log_stderr())
-
-        startup = self.handler.get("startup") or {}
-        timeout = startup.get("startup_timeout_seconds", 30)
-
-        if self.handler["type"] == "http":
-            healthy = await self._wait_for_http_health(startup, timeout)
-        else:
-            healthy = True
-
-        if not healthy:
-            return await self._handle_start_failure()
-
         self._set_state("healthy")
 
-        # Unified stdout reader for ALL persistent non-http handlers.
         # Source lines (no req_id) → source_callback.
         # NDJSON responses (with req_id) → dispatch to waiting futures.
-        if self.handler["type"] != "http":
-            self._stdout_reader_task = asyncio.create_task(self._read_stdout())
-
+        self._stdout_reader_task = asyncio.create_task(self._read_stdout())
         self._watchdog_task = asyncio.create_task(self._watchdog())
         return True
 
@@ -147,23 +137,6 @@ class PersistentHandler:
         self._set_state("degraded")
         return False
 
-    async def _wait_for_http_health(self, startup: dict, timeout: float) -> bool:
-        url = startup.get("url", "")
-        health_path = startup.get("health_path", "/health")
-        health_url = url.rstrip("/") + health_path
-        deadline = time.monotonic() + timeout
-        async with httpx.AsyncClient() as client:
-            while time.monotonic() < deadline:
-                try:
-                    r = await client.get(health_url, timeout=2.0)
-                    if r.status_code < 500:
-                        return True
-                except Exception:
-                    pass
-                await asyncio.sleep(0.5)
-        _logger.error(f"[{self.hid}] health check timed out after {timeout}s")
-        return False
-
     # ------------------------------------------------------------------
     # Invocation
     # ------------------------------------------------------------------
@@ -171,24 +144,7 @@ class PersistentHandler:
     async def invoke(self, envelope: dict) -> dict:
         if self._get_state() != "healthy":
             return {"continue": True}
-        if self.handler["type"] == "http":
-            return await self._invoke_http(envelope)
         return await self._invoke_ndjson(envelope)
-
-    async def _invoke_http(self, envelope: dict) -> dict:
-        startup = self.handler.get("startup") or {}
-        socket_path = startup.get("socket_path")
-        base_url = startup.get("url", "http://localhost:8765")
-        url = base_url.rstrip("/") + startup.get("invoke_path", "/invoke")
-        timeout = self.handler.get("timeout_seconds", 10)
-        try:
-            transport = httpx.AsyncHTTPTransport(uds=socket_path) if socket_path else None
-            async with httpx.AsyncClient(transport=transport) as client:
-                r = await client.post(url, json=envelope, timeout=timeout)
-                return r.json()
-        except Exception as exc:
-            _logger.error(f"[{self.hid}] HTTP invoke error: {exc}")
-            return {"continue": True}
 
     async def _invoke_ndjson(self, envelope: dict) -> dict:
         if not self.process or self.process.stdin is None:

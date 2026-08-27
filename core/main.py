@@ -3,21 +3,23 @@ from __future__ import annotations
 import asyncio
 import shutil
 import signal
-import sys
 import time
-import uuid
 from pathlib import Path
 
 import uvicorn
 
 import core.config as config
+import core.db as db
 import core.log as log
 import core.state as state
 import core.msg_queue as queue
 import core.store as store
+import core.transcript as transcript
 import core.handler_loader as handler_loader
 import core.lifecycle as lifecycle
 import core.pipeline as pipeline
+import core.registry as registry
+from core.envelope import new_envelope
 from core.web.api import app, configure as configure_api
 
 _logger = None
@@ -28,18 +30,12 @@ _logger = None
 # ------------------------------------------------------------------
 
 async def _source_callback(raw: dict) -> None:
-    env = {
-        "id": str(uuid.uuid4()),
-        "parent_id": None,
-        "direction": "inbound",
-        "source": raw.get("source", "unknown"),
-        "source_meta": raw.get("source_meta", {}),
-        "text": raw.get("text", ""),
-        "pipeline_text": raw.get("text", ""),
-        "depth": 0,
-        "metadata": raw.get("metadata", {}),
-    }
-    queue.enqueue_inbound(env)
+    queue.enqueue_inbound(new_envelope(
+        source=raw.get("source", "unknown"),
+        text=raw.get("text", ""),
+        source_meta=raw.get("source_meta", {}),
+        metadata=raw.get("metadata", {}),
+    ))
 
 
 # ------------------------------------------------------------------
@@ -61,19 +57,19 @@ async def main() -> None:
     cfg = config.load()
     log.setup(cfg.get("log_level", "INFO"))
     _logger = log.get("main")
-    state.log_buffer_max = cfg.get("log_buffer_size", 1000)
+    state.configure_log_buffer(cfg.get("log_buffer_size", 1000))
 
     config_dir: Path = cfg["config_dir"]
     _logger.info(f"Sijba starting — config_dir={config_dir}")
 
-    # Queue
+    # One SQLite connection, shared by queue + store + transcript
     db_path = cfg.get("db_path", "sijba.db")
     if not Path(db_path).is_absolute():
         db_path = str(config_dir / db_path)
-    queue.init(db_path)
-    store.init(db_path)
-    import core.transcript as transcript
-    transcript.init(db_path)
+    db.connect(db_path)
+    queue.init()
+    store.init()
+    transcript.init()
     _logger.info(f"Queue/store DB: {db_path}")
 
     # Uploads — default next to the DB (persistent volume), not config_dir
@@ -89,8 +85,6 @@ async def main() -> None:
     _logger.info(f"Upload dir: {upload_dir}")
 
     # Load handlers (files), then merge any dynamic registrations (none at boot)
-    import core.registry as registry
-
     state.file_handlers = handler_loader.load(config_dir)
     for h in state.file_handlers:
         hid = h["id"]

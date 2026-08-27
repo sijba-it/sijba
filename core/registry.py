@@ -8,7 +8,7 @@ Plugin WebSocket registry (persistent external processes like Claude).
 from __future__ import annotations
 import asyncio
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import core.log as log
 import core.state as state
@@ -70,7 +70,6 @@ async def _broadcast_channel_status(
 
 def plugin_register(plugin_id: str, ws: Any, capabilities: Dict[str, Any] = None) -> PluginConnection:
     """Register a new plugin WebSocket connection."""
-    global _plugins
     conn = PluginConnection(plugin_id, ws, capabilities)
     _plugins[plugin_id] = conn
     _logger.info(f"Plugin registered: {plugin_id}")
@@ -89,7 +88,6 @@ def plugin_unregister(plugin_id: str, ws: Any = None) -> bool:
     controller restart cycling all its children) silently dropped an
     otherwise-healthy, freshly (re-)registered channel from the registry.
     """
-    global _plugins, _channel_to_plugin
     conn = _plugins.get(plugin_id)
     if not conn:
         return False
@@ -105,7 +103,6 @@ def plugin_unregister(plugin_id: str, ws: Any = None) -> bool:
 
 def plugin_register_channel(plugin_id: str, channel_id: str, config: Dict[str, Any]) -> bool:
     """Register a channel for a plugin."""
-    global _channel_to_plugin
     conn = _plugins.get(plugin_id)
     if not conn:
         return False
@@ -136,7 +133,6 @@ def plugin_update_channel(plugin_id: str, channel_id: str, metadata_patch: Dict[
 
 def plugin_unregister_channel(plugin_id: str, channel_id: str) -> bool:
     """Unregister a specific channel."""
-    global _channel_to_plugin
     conn = _plugins.get(plugin_id)
     if not conn:
         return False
@@ -158,22 +154,22 @@ def plugin_heartbeat(plugin_id: str) -> bool:
 
 
 def list_plugin_channels() -> List[Dict[str, Any]]:
-    """List all registered plugin channels with their status."""
-    result = []
-    for pid, conn in _plugins.items():
-        ws_connected = True  # If in dict, it's connected
-        for ch_id, cfg in conn.channels.items():
-            result.append({
-                "channel_id": ch_id,
-                "plugin_id": pid,
-                "label": cfg.get("label", ch_id),
-                "hint": cfg.get("hint", ""),
-                "triggers": cfg.get("triggers", []),
-                "capabilities": cfg.get("capabilities", []),
-                "metadata": cfg.get("metadata", {}),
-                "status": "healthy" if ws_connected else "unavailable",
-            })
-    return result
+    """List all registered plugin channels. Being in `_plugins` *is* being
+    connected — a dropped socket is unregistered, not left in place."""
+    return [
+        {
+            "channel_id": ch_id,
+            "plugin_id": pid,
+            "label": cfg.get("label", ch_id),
+            "hint": cfg.get("hint", ""),
+            "triggers": cfg.get("triggers", []),
+            "capabilities": cfg.get("capabilities", []),
+            "metadata": cfg.get("metadata", {}),
+            "status": "healthy",
+        }
+        for pid, conn in _plugins.items()
+        for ch_id, cfg in conn.channels.items()
+    ]
 
 
 def _stash_pending(
@@ -194,15 +190,6 @@ def _stash_pending(
         "sent_at": (existing or {}).get("sent_at", _now()),
         "redeliveries": (existing or {}).get("redeliveries", 0),
     }
-
-
-def _reply_context_of(entry: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    if entry is None:
-        return None
-    # New shape has an explicit reply_context; old shape *was* the context.
-    if "reply_context" in entry and "channel_id" in entry:
-        return entry["reply_context"]
-    return entry
 
 
 async def send_to_channel(
@@ -249,10 +236,8 @@ async def redeliver_pending_for_channel(channel_id: str) -> int:
     now = _now()
     sent = 0
     for eid, entry in list(_pending_replies.items()):
-        if entry.get("channel_id") != channel_id:
+        if entry["channel_id"] != channel_id:
             continue
-        if "payload" not in entry:
-            continue  # old-shape entry without payload — can't redeliver
         age = now - float(entry.get("sent_at") or now)
         if age > _pending_ttl_seconds:
             _logger.warning(f"Dropping expired pending envelope={eid} ({age:.0f}s old)")
@@ -284,15 +269,18 @@ async def redeliver_pending_for_channel(channel_id: str) -> int:
 
 
 def pop_pending_reply(envelope_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieve and clear the reply context stashed by send_to_channel()."""
-    return _reply_context_of(_pending_replies.pop(envelope_id, None))
+    """Retrieve and clear the reply context stashed by send_to_channel().
+    Clearing it is what stops the envelope being redelivered."""
+    entry = _pending_replies.pop(envelope_id, None)
+    return entry["reply_context"] if entry else None
 
 
 def peek_pending_reply(envelope_id: str) -> Optional[Dict[str, Any]]:
     """Like pop_pending_reply() but leaves it in place — for streamed
     reply_chunk messages, where more chunks (and the final reply) are
     still to come for the same envelope_id."""
-    return _reply_context_of(_pending_replies.get(envelope_id))
+    entry = _pending_replies.get(envelope_id)
+    return entry["reply_context"] if entry else None
 
 
 async def _cleanup_dead_plugins() -> None:
@@ -324,14 +312,12 @@ def start_plugin_cleanup_task() -> None:
 
 def stop_plugin_cleanup_task() -> None:
     """Stop the background cleanup task."""
-    global _plugin_cleanup_task
     if _plugin_cleanup_task and not _plugin_cleanup_task.done():
         _plugin_cleanup_task.cancel()
         _logger.info("Plugin cleanup task stopped")
 
 
 def rebuild() -> None:
-
     """Merge file handlers + registered remotes into state.handlers (sorted)."""
     file_ids = {h["id"] for h in state.file_handlers}
     merged: List[Dict[str, Any]] = list(state.file_handlers)
@@ -398,7 +384,6 @@ def register(body: dict) -> dict:
         "startup": {
             "url": url,
             "invoke_path": body.get("invoke_path", "/invoke"),
-            "health_path": body.get("health_path", "/health"),
         },
         "_dynamic": True,
     }

@@ -1,6 +1,7 @@
 """Shared mutable runtime state."""
 from __future__ import annotations
-from typing import Any, Dict, List, Set
+from collections import deque
+from typing import Any, Deque, Dict, List, Set
 import asyncio
 
 # Sorted list of active handlers (file + dynamically registered)
@@ -18,30 +19,35 @@ handler_states: Dict[str, str] = {}
 # handler_id -> PersistentHandler instance (lifecycle.py)
 persistent: Dict[str, Any] = {}
 
-# Circular log buffer
-log_buffer: List[Dict[str, Any]] = []
-log_buffer_max: int = 1000
+# Circular log buffer, replayed to each newly connected log viewer
+log_buffer: Deque[Dict[str, Any]] = deque(maxlen=1000)
 
-# Active SSE asyncio.Queue instances (one per connected browser)
+# Active SSE asyncio.Queue instances (one per connected log viewer)
 sse_queues: Set[asyncio.Queue] = set()
 
-# Active SSE queues for outbound replies (web/app clients)
+# Active queues for outbound replies (web/app clients, SSE and WebSocket)
 reply_queues: Set[asyncio.Queue] = set()
 
 
-def broadcast_reply(event: Dict[str, Any]) -> None:
-    """Fan-out a reply event to all connected /api/replies SSE clients.
+def configure_log_buffer(maxlen: int) -> None:
+    """Resize the log buffer, keeping whatever already fits."""
+    global log_buffer
+    log_buffer = deque(log_buffer, maxlen=maxlen)
 
-    On a full queue, drop the oldest pending event and keep the client
-    subscribed rather than discarding the queue outright — the /api/replies
-    generator (web/api.py) holds its own reference to this same queue object
-    and keeps awaiting it regardless, so discarding it here only stops future
-    broadcasts from reaching that client while its SSE connection stays open
-    (ping-only) until the browser/app is manually reloaded. Dropping the
-    oldest instead means a slow/backgrounded client loses stale messages but
-    stays live for new ones, with no silent black hole.
+
+def _fan_out(queues: Set[asyncio.Queue], event: Dict[str, Any]) -> None:
+    """Push `event` to every subscriber.
+
+    On a full queue, drop the oldest pending event and keep the subscriber
+    rather than discarding its queue. The endpoint generators hold their own
+    reference to the same queue object and keep awaiting it regardless, so
+    dropping the queue here only stops future events from reaching that client
+    while its connection stays open (ping-only) until the browser/app is
+    manually reloaded. Dropping the oldest instead means a slow or
+    backgrounded client loses stale events but stays live for new ones, with
+    no silent black hole.
     """
-    for q in reply_queues:
+    for q in queues:
         try:
             q.put_nowait(event)
         except asyncio.QueueFull:
@@ -53,3 +59,14 @@ def broadcast_reply(event: Dict[str, Any]) -> None:
                 q.put_nowait(event)
             except asyncio.QueueFull:
                 pass
+
+
+def broadcast_reply(event: Dict[str, Any]) -> None:
+    """Fan-out a reply event to all connected reply clients."""
+    _fan_out(reply_queues, event)
+
+
+def broadcast_log(entry: Dict[str, Any]) -> None:
+    """Buffer a log entry and fan it out to all connected log viewers."""
+    log_buffer.append(entry)
+    _fan_out(sse_queues, entry)

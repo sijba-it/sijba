@@ -9,7 +9,7 @@
     "direction": {"type": "string", "enum": ["inbound", "outbound", "source"]},
     "category": {"type": "array", "items": {"type": "string"}},
     "lifecycle": {"type": "string", "enum": ["per_message", "persistent"]},
-    "type": {"type": "string", "enum": ["exec_json", "exec_raw", "http"]},
+    "type": {"type": "string", "enum": ["exec_json", "http"]},
     "required": {"type": "boolean"},
     "await_response": {"type": "boolean"},
     "allow_direct_inject": {"type": "boolean"},
@@ -24,8 +24,6 @@
     },
     "exec": {"type": "string"},
     "args": {"type": "array", "items": {"type": "string"}},
-    "stdin": {"type": "string"},
-    "capture_stdout": {"type": "boolean"},
     "timeout_seconds": {"type": "number"},
     "context": {
       "type": "object",
@@ -40,10 +38,6 @@
       "type": "object",
       "description": "Extra environment variables passed to the spawned process. Values support ${VAR} substitution from the host environment.",
       "additionalProperties": {"type": "string"}
-    },
-    "privileged": {
-      "type": "boolean",
-      "description": "If true, the handler is allowed to modify the sijba config directory and trigger restarts."
     },
     "router_hint": {
       "type": "string",
@@ -62,9 +56,6 @@
       "properties": {
         "url": {"type": "string"},
         "invoke_path": {"type": "string"},
-        "health_path": {"type": "string"},
-        "socket_path": {"type": "string"},
-        "startup_timeout_seconds": {"type": "number"},
         "restart_policy": {"type": "string", "enum": ["always", "on_failure", "never"]}
       },
       "additionalProperties": false

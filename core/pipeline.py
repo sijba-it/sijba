@@ -2,14 +2,16 @@
 from __future__ import annotations
 import asyncio
 import re
-import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional
 
 import core.log as log
 import core.state as state
 import core.plugin_runner as plugin_runner
 import core.registry as registry
+import core.reply as reply
+import core.transcript as transcript
+from core.envelope import new_envelope
 
 _logger = log.get("pipeline")
 
@@ -83,31 +85,6 @@ def _resolve_inject_target(target: Optional[str], *, require_allow_direct: bool 
 
 
 # ------------------------------------------------------------------
-# Build envelope
-# ------------------------------------------------------------------
-
-def _new_envelope(
-    source: str,
-    text: str,
-    source_meta: dict = None,
-    parent_id: str = None,
-    depth: int = 0,
-    metadata: dict = None,
-) -> dict:
-    return {
-        "id": str(uuid.uuid4()),
-        "parent_id": parent_id,
-        "direction": "inbound",
-        "source": source,
-        "source_meta": source_meta or {},
-        "text": text,
-        "pipeline_text": text,
-        "depth": depth,
-        "metadata": metadata or {},
-    }
-
-
-# ------------------------------------------------------------------
 # Core pipeline runner
 # ------------------------------------------------------------------
 
@@ -165,8 +142,7 @@ async def _run(
     for handler in handlers:
         hid = handler["id"]
 
-        hstate = state.handler_states.get(hid, "healthy")
-        if hstate not in ("healthy",):
+        if state.handler_states.get(hid, "healthy") != "healthy":
             continue
 
         # Direct API/plugin targets skip match so the user can talk to a part
@@ -196,45 +172,24 @@ async def _run(
             _logger.info(
                 f"respond [{src}→{respond_target}]: {respond_text[:120]!r}"
             )
-            out_env = {
-                "id": str(uuid.uuid4()),
-                "parent_id": envelope["id"],
-                "direction": "outbound",
-                "source": src,
-                "source_meta": envelope.get("source_meta", {}),
-                "text": respond_text,
-                "pipeline_text": respond_text,
-                "depth": envelope.get("depth", 0),
-                "metadata": {},
-                "_respond_target": respond_target,
-            }
-            _enqueue_outbound(out_env)
-            # Let web/app clients hear replies without a dedicated outbound sink
-            if src in ("web", "app"):
-                state.broadcast_reply({
-                    "type": "reply",
-                    "text": respond_text,
-                    "parent_id": envelope["id"],
-                    "handler_id": hid,
-                    "source_meta": envelope.get("source_meta") or {},
-                    "channel": envelope.get("_transcript_channel") or "pipeline",
-                })
-            # Persist bot reply for cross-device replay (bounded)
-            try:
-                import core.transcript as transcript
-                chat_id = (envelope.get("source_meta") or {}).get("chat_id")
-                if chat_id and respond_text:
-                    transcript.append(
-                        chat_id=str(chat_id),
-                        channel=envelope.get("_transcript_channel") or "pipeline",
-                        role="bot",
-                        text=respond_text,
-                        handler_id=hid,
-                        envelope_id=envelope.get("id"),
-                        source=src,
-                    )
-            except Exception as exc:
-                _logger.warning(f"transcript append (bot) failed: {exc}")
+            _enqueue_outbound(new_envelope(
+                source=src,
+                text=respond_text,
+                direction="outbound",
+                source_meta=envelope.get("source_meta", {}),
+                parent_id=envelope["id"],
+                depth=envelope.get("depth", 0),
+                _respond_target=respond_target,
+            ))
+            reply.deliver(
+                text=respond_text,
+                source=src,
+                source_meta=envelope.get("source_meta"),
+                channel=envelope.get("_transcript_channel") or "pipeline",
+                parent_id=envelope["id"],
+                handler_id=hid,
+                envelope_id=envelope.get("id"),
+            )
 
         # inject → new inbound message
         if "inject" in response and response["inject"]:
@@ -245,7 +200,7 @@ async def _run(
                     f"[{hid}] inject depth {depth} exceeds max_inject_depth={_max_inject_depth} — discarding"
                 )
             else:
-                child_env = _new_envelope(
+                child_env = new_envelope(
                     source="internal",
                     text=inj.get("text", ""),
                     parent_id=envelope["id"],
@@ -306,6 +261,27 @@ async def _route_to_plugin_channel(ch: dict, envelope: dict) -> bool:
     return sent
 
 
+def _record_user_message(envelope: dict, channel: str, src: str) -> None:
+    """Persist the incoming message for cross-device replay. Never fatal."""
+    chat_id = (envelope.get("source_meta") or {}).get("chat_id")
+    body = envelope.get("pipeline_text") or envelope.get("text") or ""
+    attachments = (envelope.get("metadata") or {}).get("attachments") or None
+    if not (chat_id and (body or attachments)):
+        return
+    try:
+        transcript.append(
+            chat_id=str(chat_id),
+            channel=channel,
+            role="user",
+            text=body,
+            envelope_id=envelope.get("id"),
+            source=src,
+            attachments=attachments,
+        )
+    except Exception as exc:
+        _logger.warning(f"transcript append (user) failed: {exc}")
+
+
 async def process_inbound(envelope: dict) -> None:
     src = envelope.get("source", "?")
     text = (envelope.get("pipeline_text") or "")[:80]
@@ -316,23 +292,7 @@ async def process_inbound(envelope: dict) -> None:
 
     # Record user message (depth 0 only — no inject echoes)
     if envelope.get("depth", 0) == 0:
-        try:
-            import core.transcript as transcript
-            chat_id = (envelope.get("source_meta") or {}).get("chat_id")
-            body = envelope.get("pipeline_text") or envelope.get("text") or ""
-            attachments = (envelope.get("metadata") or {}).get("attachments") or None
-            if chat_id and (body or attachments):
-                transcript.append(
-                    chat_id=str(chat_id),
-                    channel=channel,
-                    role="user",
-                    text=body,
-                    envelope_id=envelope.get("id"),
-                    source=src,
-                    attachments=attachments,
-                )
-        except Exception as exc:
-            _logger.warning(f"transcript append (user) failed: {exc}")
+        _record_user_message(envelope, channel, src)
 
     if target:
         # API / web direct target — no allow_direct_inject gate (explicit user choice).

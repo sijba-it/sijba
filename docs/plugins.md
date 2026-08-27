@@ -23,7 +23,8 @@ Logs every message and continues the pipeline. Place at priority 0 — always ru
   "priority": 0.0,
   "direction": "inbound",
   "lifecycle": "per_message",
-  "type": "exec_raw",
+  "type": "exec_json",
+  "await_response": false,
   "exec": "{sijba_plugins}/audit.sh"
 }
 ```

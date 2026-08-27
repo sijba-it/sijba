@@ -67,9 +67,6 @@ handlers/
   "startup": {
     "url": "http://localhost:9000",
     "invoke_path": "/invoke",
-    "health_path": "/health",
-    "socket_path": "",
-    "startup_timeout_seconds": 10,
     "restart_policy": "on_failure"
   }
 }
@@ -85,7 +82,7 @@ handlers/
 | `priority` | from filename | Lower = runs first |
 | `direction` | required | `inbound` / `outbound` / `source` |
 | `lifecycle` | `per_message` | `per_message` / `persistent` |
-| `type` | required | `exec_json` / `exec_raw` / `http` |
+| `type` | required | `exec_json` / `http` |
 | `exec` | — | Path to executable. Use `{sijba_plugins}/...` for builtins |
 | `continue_on_match` | `true` | Whether to continue pipeline after this handler matches |
 | `required` | `false` | If true, pipeline stops on handler failure |

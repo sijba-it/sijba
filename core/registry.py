@@ -153,6 +153,30 @@ def plugin_heartbeat(plugin_id: str) -> bool:
     return True
 
 
+def channel_triggers(cfg: Dict[str, Any], channel_id: str = "") -> List[str]:
+    """The @-mentions a channel answers to, in registration order.
+
+    Routing out of plain message text requires an explicit @mention. A bare
+    project name would otherwise hijack any sentence starting with that word —
+    "Recherche zu Thema X" is a message *about* research, not one addressed to
+    the Recherche agent.
+
+    Triggers registered without an @ are normalised rather than ignored, so
+    plugins do not have to be redeployed in lockstep with core.
+    """
+    out: List[str] = []
+    for raw in cfg.get("triggers") or []:
+        trigger = str(raw).strip()
+        if not trigger:
+            continue
+        mention = trigger if trigger.startswith("@") else f"@{trigger}"
+        if mention not in out:
+            out.append(mention)
+    if not out and channel_id:
+        out.append(f"@{channel_id}")  # always addressable by its own id
+    return out
+
+
 def list_plugin_channels() -> List[Dict[str, Any]]:
     """List all registered plugin channels. Being in `_plugins` *is* being
     connected — a dropped socket is unregistered, not left in place."""
@@ -162,7 +186,7 @@ def list_plugin_channels() -> List[Dict[str, Any]]:
             "plugin_id": pid,
             "label": cfg.get("label", ch_id),
             "hint": cfg.get("hint", ""),
-            "triggers": cfg.get("triggers", []),
+            "triggers": channel_triggers(cfg, ch_id),
             "capabilities": cfg.get("capabilities", []),
             "metadata": cfg.get("metadata", {}),
             "status": "healthy",
@@ -175,21 +199,17 @@ def list_plugin_channels() -> List[Dict[str, Any]]:
 def channel_routing_targets() -> List[Dict[str, Any]]:
     """Plugin channels described the way a router has to address them.
 
-    `id` is the channel's *trigger*, not its channel_id, because that is what
-    a router must emit: the reply is re-injected as a normal message and
-    picked up by the trigger match in pipeline.process_inbound. Prefer an
-    "@"-prefixed trigger — that is what the UI inserts and what plugins
-    register as their canonical mention.
+    `id` is the channel's @mention, not its channel_id, because that is what a
+    router must emit: the reply is re-injected as a normal message and picked
+    up by the trigger match in pipeline.process_inbound, which only accepts
+    @mentions.
     """
     targets = []
     for conn in _plugins.values():
         for ch_id, cfg in conn.channels.items():
-            triggers = cfg.get("triggers") or []
-            trigger = next((t for t in triggers if t.startswith("@")), None)
-            if trigger is None:
-                trigger = triggers[0] if triggers else ch_id
+            mentions = channel_triggers(cfg, ch_id)
             targets.append({
-                "id": trigger,
+                "id": mentions[0],
                 "router_hint": cfg.get("hint") or cfg.get("label") or ch_id,
             })
     return targets

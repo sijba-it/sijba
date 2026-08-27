@@ -454,3 +454,158 @@ async def test_router_can_route_a_plain_message_to_a_plugin_channel(wired, db, c
     assert ws.messages_for("projekt-a"), "router's pick never reached the channel"
     assert ws.messages_for("projekt-a")[0]["payload"]["text"] == \
         "@projekt-a mach das licht an"
+
+
+# ------------------------------------------------------------------
+# Text routing requires an explicit @mention
+# ------------------------------------------------------------------
+
+async def test_bare_project_name_does_not_hijack_a_message(wired, db, calls):
+    """The cursor plugin registers its bare project name as a trigger.
+    "Recherche zu Thema X" is a message *about* research, not one addressed
+    to the Recherche agent, so it must stay in the pipeline."""
+    ws = register_channel("cursor", "cursor-recherche",
+                          triggers=["Recherche", "cursor-recherche"])
+    install(handler("echo", priority=99.0))
+
+    await pipeline.process_inbound(envelope("Recherche zu Thema X machen"))
+
+    assert ws.messages_for("cursor-recherche") == [], "bare word must not route"
+    assert ids(calls) == ["echo"]
+
+
+async def test_at_mention_of_a_bare_trigger_still_routes(wired, db, calls):
+    """Core normalises registered triggers to their @ form, so a plugin that
+    has not been redeployed is still reachable — just only via @."""
+    ws = register_channel("cursor", "cursor-recherche",
+                          triggers=["Recherche", "cursor-recherche"])
+    install(handler("echo", priority=99.0))
+
+    await pipeline.process_inbound(envelope("@Recherche fix the test"))
+
+    assert ws.messages_for("cursor-recherche"), "@ form of a bare trigger must route"
+    assert ids(calls) == []
+
+
+async def test_channel_without_triggers_is_addressable_by_its_id(wired, db, calls):
+    ws = register_channel("cursor", "projekt-a", triggers=[])
+
+    await pipeline.process_inbound(envelope("@projekt-a hallo"))
+
+    assert ws.messages_for("projekt-a")
+
+
+async def test_advertised_trigger_is_one_the_match_accepts(wired, db, calls):
+    """What the router is told to emit must be what the trigger match takes."""
+    import core.registry as registry
+
+    register_channel("cursor", "cursor-recherche", triggers=["Recherche"])
+    register_channel("cursor2", "other", triggers=[])
+
+    for target in registry.channel_routing_targets():
+        advertised = target["id"]
+        channels = registry.list_plugin_channels()
+        assert any(advertised in c["triggers"] for c in channels), \
+            f"router would be told to emit {advertised!r}, which nothing matches"
+
+
+async def test_direct_target_ignores_the_at_requirement(wired, db, calls):
+    """The @ rule is only about recognising a channel *in message text*.
+    Picking the channel explicitly (UI sidebar, or `target` on the API)
+    matches on channel_id, so no mention is needed anywhere."""
+    ws = register_channel("cursor", "cursor-recherche", triggers=["Recherche"])
+    install(handler("echo", priority=99.0))
+
+    await pipeline.process_inbound(
+        envelope("fix the failing test", _target="cursor-recherche")
+    )
+
+    assert ws.messages_for("cursor-recherche"), "direct target must still work"
+    payload = ws.messages_for("cursor-recherche")[0]["payload"]
+    assert payload["text"] == "fix the failing test", "text is passed through as-is"
+    assert ids(calls) == []
+
+
+async def test_direct_target_works_for_a_channel_with_no_triggers(wired, db, calls):
+    ws = register_channel("cursor", "projekt-a", triggers=[])
+
+    await pipeline.process_inbound(envelope("hallo", _target="projekt-a"))
+
+    assert ws.messages_for("projekt-a")
+
+
+# ------------------------------------------------------------------
+# Return path: both kinds of reply must reach outbound handlers
+# ------------------------------------------------------------------
+
+def voice_env(text: str, **overrides) -> dict:
+    return envelope(text, source="webhook:voice",
+                    source_meta={"chat_id": "voice"}, **overrides)
+
+
+async def test_handler_reply_reaches_a_source_scoped_outbound_handler(
+    wired, db, calls
+):
+    """A per-webhook return path, e.g. Pushover for a voice webhook."""
+    _, outbound = wired
+    install(
+        handler("assistant", priority=50.0),
+        handler("pushover", direction="outbound",
+                match={"source": ["webhook:voice"]}),
+    )
+    calls.responses["assistant"] = {
+        "continue": False, "respond": {"text": "Licht ist an"},
+    }
+
+    await pipeline.process_inbound(voice_env("licht an"))
+    assert len(outbound) == 1
+    for out in outbound:
+        await pipeline.process_outbound(out)
+
+    assert "pushover" in ids(calls)
+
+
+async def test_plugin_channel_reply_also_reaches_the_outbound_handler(
+    wired, db, calls
+):
+    """Regression: plugin replies used to skip the outbound pipeline entirely,
+    so a per-source return path silently never fired for channel traffic —
+    which is where the actual work happens."""
+    import core.web.api as api
+
+    _, outbound = wired
+    register_channel("cursor", "projekt-a", triggers=["@projekt-a"])
+    install(handler("pushover", direction="outbound",
+                    match={"source": ["webhook:voice"]}))
+
+    await pipeline.process_inbound(voice_env("@projekt-a mach was"))
+    await api._handle_plugin_reply(
+        {"channel": "projekt-a", "envelope_id": "env-1", "text": "fertig"}
+    )
+
+    assert len(outbound) == 1, "channel reply never reached the outbound queue"
+    assert outbound[0]["text"] == "fertig"
+    assert outbound[0]["source"] == "webhook:voice"
+
+    for out in outbound:
+        await pipeline.process_outbound(out)
+    assert "pushover" in ids(calls)
+
+
+async def test_streamed_chunks_do_not_reach_the_outbound_handler(
+    wired, db, calls
+):
+    """Only the final reply goes out — a Pushover notification per delta
+    would be unusable."""
+    import core.web.api as api
+
+    _, outbound = wired
+    register_channel("cursor", "projekt-a", triggers=["@projekt-a"])
+
+    await pipeline.process_inbound(voice_env("@projekt-a mach was"))
+    for part in ("Ich ", "mache ", "das."):
+        await api._handle_plugin_reply_chunk(
+            {"channel": "projekt-a", "envelope_id": "env-1", "text": part}
+        )
+
+    assert outbound == []

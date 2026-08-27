@@ -257,7 +257,7 @@ async def test_router_sees_handlers_and_channels_together(tmp_path, db):
     assert resp["pipeline_text"] == "pods,@projekt-a"
 
 
-async def test_channel_without_at_trigger_falls_back_to_its_id(tmp_path, db):
+async def test_channel_without_triggers_is_advertised_as_its_id(tmp_path, db):
     from conftest import register_channel
 
     register_channel("cursor", "projekt-a", triggers=[])
@@ -266,7 +266,21 @@ async def test_channel_without_at_trigger_falls_back_to_its_id(tmp_path, db):
 
     resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
 
-    assert resp["pipeline_text"] == "projekt-a"
+    assert resp["pipeline_text"] == "@projekt-a", "always an @mention"
+
+
+async def test_bare_registered_trigger_is_advertised_as_an_at_mention(tmp_path, db):
+    """The cursor plugin registers a bare project name; the router must still
+    be told to emit the @ form, since that is all the trigger match takes."""
+    from conftest import register_channel
+
+    register_channel("cursor", "cursor-recherche", triggers=["Recherche"])
+    h = handler("router", exec=script(tmp_path, "r.py", ROUTER_VIEW),
+                receive_handler_context=True)
+
+    resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
+
+    assert resp["pipeline_text"] == "@Recherche"
 
 
 async def test_router_is_not_offered_itself_as_a_target(tmp_path, db):

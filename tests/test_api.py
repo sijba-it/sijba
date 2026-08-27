@@ -1,0 +1,369 @@
+"""Web API: auth, message injection, uploads, and plugin reply routing."""
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+import core.msg_queue as queue
+import core.registry as registry
+import core.transcript as transcript
+import core.web.api as api
+from conftest import register_channel
+
+
+@pytest.fixture
+def client(tmp_path, db):
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    api.configure(
+        auth_token="tok",
+        webhook_token="hook",
+        config_dir=tmp_path,
+        reload_fn=lambda: None,
+        upload_dir=uploads,
+    )
+    with TestClient(api.app) as c:
+        c.headers.update({"Authorization": "Bearer tok"})
+        yield c
+
+
+@pytest.fixture
+async def aclient(tmp_path, db):
+    """Async client — needed by tests that touch the plugin registry, which
+    schedules status broadcasts with asyncio.create_task()."""
+    import httpx
+
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    api.configure(
+        auth_token="tok", webhook_token="hook", config_dir=tmp_path,
+        reload_fn=lambda: None, upload_dir=uploads,
+    )
+    transport = httpx.ASGITransport(app=api.app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": "Bearer tok"},
+    ) as c:
+        yield c
+
+
+@pytest.fixture
+def noauth_client(tmp_path, db):
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    api.configure(
+        auth_token=None, webhook_token=None, config_dir=tmp_path,
+        reload_fn=lambda: None, upload_dir=uploads,
+    )
+    with TestClient(api.app) as c:
+        yield c
+
+
+# ------------------------------------------------------------------
+# Auth
+# ------------------------------------------------------------------
+
+def test_missing_token_is_rejected(client):
+    r = client.get("/api/handlers", headers={"Authorization": ""})
+    assert r.status_code == 401
+
+
+def test_wrong_token_is_rejected(client):
+    r = client.get("/api/handlers", headers={"Authorization": "Bearer nope"})
+    assert r.status_code == 401
+
+
+def test_query_token_is_accepted_for_sse(client):
+    """EventSource cannot set headers, so ?token= must work."""
+    r = client.get("/api/handlers?token=tok", headers={"Authorization": ""})
+    assert r.status_code == 200
+
+
+def test_no_auth_configured_allows_everything(noauth_client):
+    assert noauth_client.get("/api/handlers").status_code == 200
+
+
+def test_version_needs_no_auth(client):
+    r = client.get("/api/version", headers={"Authorization": ""})
+    assert r.status_code == 200
+    assert r.json()["service"] == "sijba"
+
+
+# ------------------------------------------------------------------
+# Message injection
+# ------------------------------------------------------------------
+
+def test_message_is_queued(client):
+    r = client.post("/api/message", json={"text": "hallo"})
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "queued"
+    assert queue.depths()["inbound"] == {"pending": 1}
+
+
+def test_message_requires_text_or_attachments(client):
+    assert client.post("/api/message", json={}).status_code == 400
+
+
+def test_message_accepts_attachments_without_text(client):
+    r = client.post(
+        "/api/message",
+        json={"attachments": [{"id": "f1", "filename": "a.png"}]},
+    )
+    assert r.status_code == 200
+
+
+def test_message_defaults_source_and_chat_id(client):
+    client.post("/api/message", json={"text": "hallo"})
+
+    env = _first_queued()
+    assert env["source"] == "web"
+    assert env["source_meta"]["chat_id"] == "web"
+
+
+def test_message_target_is_passed_through(client):
+    r = client.post("/api/message", json={"text": "hallo", "target": "projekt-a"})
+
+    assert r.json()["target"] == "projekt-a"
+    assert _first_queued()["_target"] == "projekt-a"
+
+
+def test_blank_target_is_dropped(client):
+    client.post("/api/message", json={"text": "hallo", "target": "   "})
+
+    assert "_target" not in _first_queued()
+
+
+def test_attachments_land_in_metadata(client):
+    atts = [{"id": "f1", "filename": "a.png"}]
+    client.post("/api/message", json={"text": "schau", "attachments": atts})
+
+    assert _first_queued()["metadata"]["attachments"] == atts
+
+
+def _first_queued() -> dict:
+    import json
+
+    import core.db as database
+
+    row = database.query_one(
+        f"SELECT envelope_json FROM {queue.INBOUND} ORDER BY created_at LIMIT 1"
+    )
+    return json.loads(row[0])
+
+
+# ------------------------------------------------------------------
+# Webhook
+# ------------------------------------------------------------------
+
+def test_webhook_accepts_valid_token(client):
+    r = client.post("/webhook/hook", json={"text": "von aussen"})
+
+    assert r.status_code == 200
+    assert _first_queued()["source"] == "webhook"
+
+
+def test_webhook_rejects_bad_token(client):
+    assert client.post("/webhook/wrong", json={"text": "x"}).status_code == 403
+
+
+# ------------------------------------------------------------------
+# Uploads
+# ------------------------------------------------------------------
+
+def test_upload_and_download_roundtrip(client):
+    r = client.post("/api/upload", files={"file": ("bild.png", b"binary-data")})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["filename"] == "bild.png"
+    assert body["size"] == len(b"binary-data")
+
+    got = client.get(body["url"])
+    assert got.status_code == 200
+    assert got.content == b"binary-data"
+
+
+def test_upload_strips_path_components_from_the_filename(client):
+    r = client.post("/api/upload", files={"file": ("../../etc/passwd", b"x")})
+
+    assert r.json()["filename"] == "passwd"
+
+
+def test_upload_rejects_oversized_files(client, monkeypatch):
+    monkeypatch.setattr(api, "MAX_UPLOAD_BYTES", 10)
+
+    r = client.post("/api/upload", files={"file": ("big.bin", b"x" * 100)})
+
+    assert r.status_code == 413
+
+
+def test_download_rejects_non_uuid_ids(client):
+    assert client.get("/api/upload/..%2F..%2Fetc").status_code == 404
+
+
+def test_download_unknown_id_is_404(client):
+    assert client.get("/api/upload/3f2504e0-4f89-11d3-9a0c-0305e82c3301").status_code == 404
+
+
+# ------------------------------------------------------------------
+# Transcript endpoint
+# ------------------------------------------------------------------
+
+def test_transcript_endpoint_returns_messages(client):
+    transcript.append(chat_id="web", channel="pipeline", role="user", text="hallo")
+
+    r = client.get("/api/transcript", params={"chat_id": "web"})
+
+    assert r.status_code == 200
+    assert [m["text"] for m in r.json()["messages"]] == ["hallo"]
+
+
+def test_transcript_endpoint_requires_chat_id(client):
+    assert client.get("/api/transcript", params={"chat_id": ""}).status_code == 400
+
+
+# ------------------------------------------------------------------
+# Plugin reply routing (mirrors pipeline `respond` handling)
+# ------------------------------------------------------------------
+
+async def test_plugin_reply_broadcasts_and_persists(db, replies):
+    register_channel("cursor", "projekt-a")
+    await registry.send_to_channel(
+        "projekt-a",
+        {"envelope_id": "e1"},
+        {"source": "web", "source_meta": {"chat_id": "web"},
+         "channel": "projekt-a", "parent_id": "e1"},
+    )
+
+    await api._handle_plugin_reply(
+        {"type": "reply", "channel": "projekt-a", "envelope_id": "e1", "text": "fertig"}
+    )
+
+    events = replies.drain()
+    assert [e["type"] for e in events] == ["reply"]
+    assert events[0]["text"] == "fertig"
+    assert events[0]["handler_id"] == "plugin:projekt-a"
+    assert events[0]["channel"] == "projekt-a"
+
+    msgs = transcript.list_messages("web", "projekt-a")
+    assert [(m["role"], m["text"]) for m in msgs] == [("bot", "fertig")]
+
+
+async def test_plugin_reply_clears_the_pending_entry(db, replies):
+    register_channel("cursor", "projekt-a")
+    await registry.send_to_channel(
+        "projekt-a", {"envelope_id": "e1"}, {"source": "web", "source_meta": {}}
+    )
+
+    await api._handle_plugin_reply(
+        {"channel": "projekt-a", "envelope_id": "e1", "text": "fertig"}
+    )
+
+    assert registry.peek_pending_reply("e1") is None, "must not be redelivered"
+
+
+async def test_plugin_reply_for_unknown_envelope_does_not_crash(db, replies):
+    await api._handle_plugin_reply(
+        {"channel": "projekt-a", "envelope_id": "ghost", "text": "hi"}
+    )
+
+    assert replies.drain() == [], "no context means no web client to notify"
+
+
+async def test_plugin_reply_from_non_web_source_is_not_broadcast(db, replies):
+    register_channel("cursor", "projekt-a")
+    await registry.send_to_channel(
+        "projekt-a",
+        {"envelope_id": "e1"},
+        {"source": "telegram", "source_meta": {"chat_id": "42"}, "channel": "projekt-a"},
+    )
+
+    await api._handle_plugin_reply(
+        {"channel": "projekt-a", "envelope_id": "e1", "text": "fertig"}
+    )
+
+    assert replies.drain() == []
+    assert transcript.list_messages("42", "projekt-a"), "still persisted"
+
+
+# ------------------------------------------------------------------
+# Streamed chunks
+# ------------------------------------------------------------------
+
+async def test_reply_chunk_is_broadcast_but_not_persisted(db, replies):
+    register_channel("cursor", "projekt-a")
+    await registry.send_to_channel(
+        "projekt-a",
+        {"envelope_id": "e1"},
+        {"source": "web", "source_meta": {"chat_id": "web"},
+         "channel": "projekt-a", "parent_id": "e1"},
+    )
+
+    await api._handle_plugin_reply_chunk(
+        {"channel": "projekt-a", "envelope_id": "e1", "text": "teil "}
+    )
+
+    events = replies.drain()
+    assert [e["type"] for e in events] == ["reply_chunk"]
+    assert events[0]["text"] == "teil "
+    assert transcript.list_messages("web", "projekt-a") == [], "chunks are not stored"
+
+
+async def test_reply_chunk_keeps_the_pending_entry(db, replies):
+    register_channel("cursor", "projekt-a")
+    await registry.send_to_channel(
+        "projekt-a", {"envelope_id": "e1"}, {"source": "web", "source_meta": {}}
+    )
+
+    await api._handle_plugin_reply_chunk(
+        {"channel": "projekt-a", "envelope_id": "e1", "text": "teil"}
+    )
+
+    assert registry.peek_pending_reply("e1") is not None, "more chunks still to come"
+
+
+async def test_reply_chunk_for_unknown_envelope_is_ignored(db, replies):
+    await api._handle_plugin_reply_chunk(
+        {"channel": "projekt-a", "envelope_id": "ghost", "text": "x"}
+    )
+
+    assert replies.drain() == []
+
+
+async def test_empty_reply_chunk_is_ignored(db, replies):
+    register_channel("cursor", "projekt-a")
+    await registry.send_to_channel(
+        "projekt-a", {"envelope_id": "e1"}, {"source": "web", "source_meta": {}}
+    )
+
+    await api._handle_plugin_reply_chunk({"channel": "projekt-a", "envelope_id": "e1", "text": ""})
+
+    assert replies.drain() == []
+
+
+# ------------------------------------------------------------------
+# Handler listing
+# ------------------------------------------------------------------
+
+def test_handlers_endpoint_reports_state(client):
+    from conftest import handler, install
+
+    install(handler("echo", priority=99.0, router_hint="Echo"))
+
+    body = client.get("/api/handlers").json()
+
+    assert len(body) == 1
+    assert body[0]["id"] == "echo"
+    assert body[0]["state"] == "healthy"
+    assert body[0]["dynamic"] is False
+
+
+async def test_plugin_channels_endpoint(aclient):
+    register_channel("cursor", "projekt-a", triggers=["@projekt-a"])
+
+    body = (await aclient.get("/api/plugin/channels")).json()
+
+    assert [c["channel_id"] for c in body] == ["projekt-a"]
+    assert body[0]["triggers"] == ["@projekt-a"]

@@ -6,16 +6,20 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status, WebSocket, WebSocketDisconnect, Query
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse
 
 import core.log as log
-import core.state as state
 import core.msg_queue as queue
+import core.registry as registry
+import core.reply as reply
+import core.state as state
 import core.store as store
+import core.transcript as transcript
+from core.envelope import new_envelope
 
 _logger = log.get("api")
 app = FastAPI(title="Sjba", docs_url=None, redoc_url=None)
@@ -117,11 +121,9 @@ async def register_handler(request: Request):
 
     Body:
       id, url (required)
-      match, router_hint, priority, invoke_path, health_path,
+      match, router_hint, priority, invoke_path,
       timeout_seconds, ttl_seconds, continue_on_match, category
     """
-    import core.registry as registry
-
     body = await request.json()
     try:
         return registry.register(body)
@@ -132,8 +134,6 @@ async def register_handler(request: Request):
 @app.post("/api/register/{handler_id}/heartbeat", dependencies=[Depends(_check_auth)])
 async def register_heartbeat(handler_id: str, request: Request):
     """Refresh TTL for a registered remote handler."""
-    import core.registry as registry
-
     body = {}
     try:
         body = await request.json()
@@ -147,8 +147,6 @@ async def register_heartbeat(handler_id: str, request: Request):
 
 @app.delete("/api/register/{handler_id}", dependencies=[Depends(_check_auth)])
 async def unregister_handler(handler_id: str):
-    import core.registry as registry
-
     if not registry.unregister(handler_id):
         raise HTTPException(status_code=404, detail="not registered")
     return {"id": handler_id, "status": "unregistered"}
@@ -201,70 +199,44 @@ async def get_queue():
 
 @app.get("/api/plugin/channels", dependencies=[Depends(_check_auth)])
 async def list_plugin_channels():
-    import core.registry as registry
-
     return registry.list_plugin_channels()
 
 
 async def _handle_plugin_reply(msg: dict) -> None:
     """Route a {"type": "reply"} message from a plugin WebSocket back to
-    whoever sent the original message — mirrors the `respond` handling in
-    pipeline._run() for regular handlers."""
-    import core.registry as registry
-
+    whoever sent the original message — the same delivery the pipeline does
+    for a handler's `respond`."""
     envelope_id = msg.get("envelope_id")
     channel_id = msg.get("channel")
     text = msg.get("text", "")
-    handler_id = f"plugin:{channel_id}"
 
     ctx = registry.pop_pending_reply(envelope_id) if envelope_id else None
     if ctx is None:
         _logger.warning(f"plugin reply for unknown envelope_id={envelope_id!r} (channel={channel_id})")
         ctx = {}
-    source = ctx.get("source") or "plugin"
-    source_meta = ctx.get("source_meta") or {}
-    transcript_channel = ctx.get("channel") or channel_id or "pipeline"
-    parent_id = ctx.get("parent_id") or envelope_id
 
+    source = ctx.get("source") or "plugin"
+    channel = ctx.get("channel") or channel_id or "pipeline"
     _logger.info(
         f"[plugin:{channel_id}] reply ({len(text)} chars) for envelope={envelope_id} "
-        f"source={source} channel={transcript_channel}"
+        f"source={source} channel={channel}"
     )
 
-    if source in ("web", "app"):
-        state.broadcast_reply({
-            "type": "reply",
-            "text": text,
-            "parent_id": parent_id,
-            "handler_id": handler_id,
-            "source_meta": source_meta,
-            "channel": transcript_channel,
-        })
-
-    try:
-        import core.transcript as transcript
-
-        chat_id = source_meta.get("chat_id")
-        if chat_id and text:
-            transcript.append(
-                chat_id=str(chat_id),
-                channel=transcript_channel,
-                role="bot",
-                text=text,
-                handler_id=handler_id,
-                envelope_id=envelope_id,
-                source=source,
-            )
-    except Exception as exc:
-        _logger.warning(f"transcript append (plugin reply) failed: {exc}")
+    reply.deliver(
+        text=text,
+        source=source,
+        source_meta=ctx.get("source_meta"),
+        channel=channel,
+        parent_id=ctx.get("parent_id") or envelope_id,
+        handler_id=f"plugin:{channel_id}",
+        envelope_id=envelope_id,
+    )
 
 
 async def _handle_plugin_reply_chunk(msg: dict) -> None:
     """Route a {"type": "reply_chunk"} streaming delta straight to any
-    connected web/app client via SSE — never persisted, the final {"type":
-    "reply"} carries the authoritative full text into the transcript."""
-    import core.registry as registry
-
+    connected web/app client — never persisted, the final {"type": "reply"}
+    carries the authoritative full text into the transcript."""
     envelope_id = msg.get("envelope_id")
     channel_id = msg.get("channel")
     text = msg.get("text", "")
@@ -274,20 +246,19 @@ async def _handle_plugin_reply_chunk(msg: dict) -> None:
     ctx = registry.peek_pending_reply(envelope_id)
     if ctx is None:
         return
-    source = ctx.get("source") or "plugin"
-    if source not in ("web", "app"):
-        return
 
     _logger.info(f"[plugin:{channel_id}] chunk +{len(text)} chars for envelope={envelope_id}")
 
-    state.broadcast_reply({
-        "type": "reply_chunk",
-        "text": text,
-        "parent_id": ctx.get("parent_id") or envelope_id,
-        "handler_id": f"plugin:{channel_id}",
-        "source_meta": ctx.get("source_meta") or {},
-        "channel": ctx.get("channel") or channel_id or "pipeline",
-    })
+    reply.deliver(
+        text=text,
+        source=ctx.get("source") or "plugin",
+        source_meta=ctx.get("source_meta"),
+        channel=ctx.get("channel") or channel_id or "pipeline",
+        parent_id=ctx.get("parent_id") or envelope_id,
+        handler_id=f"plugin:{channel_id}",
+        event="reply_chunk",
+        persist=False,
+    )
 
 
 @app.websocket("/api/plugin/ws")
@@ -308,8 +279,6 @@ async def plugin_ws(websocket: WebSocket):
       client -> server: {"type": "channel_update", "channel_id", "metadata"}  (merged into channel metadata)
       either direction:  {"type": "ping"} / {"type": "pong"}                (heartbeat)
     """
-    import core.registry as registry
-
     token = websocket.query_params.get("token")
     if _auth_token and token != _auth_token:
         _logger.warning(f"plugin_ws: rejected connection from {websocket.client} — bad/missing token")
@@ -378,6 +347,29 @@ async def plugin_ws(websocket: WebSocket):
             registry.plugin_unregister(plugin_id, websocket)
 
 
+# ------------------------------------------------------------------
+# SSE / WebSocket streams
+# ------------------------------------------------------------------
+
+# Idle gap after which a keepalive goes out so proxies don't drop the stream.
+_STREAM_PING_SECONDS = 15.0
+
+
+async def _sse_stream(request: Request, q: asyncio.Queue, registry_set: set):
+    """Drain `q` as SSE until the client goes away, then unsubscribe."""
+    try:
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                entry = await asyncio.wait_for(q.get(), timeout=_STREAM_PING_SECONDS)
+            except asyncio.TimeoutError:
+                entry = {"ping": True}
+            yield {"data": json.dumps(entry)}
+    finally:
+        registry_set.discard(q)
+
+
 @app.get("/api/logs", dependencies=[Depends(_check_auth)])
 async def stream_logs(request: Request):
     """SSE endpoint: streams log entries as JSON."""
@@ -388,20 +380,7 @@ async def stream_logs(request: Request):
     for entry in list(state.log_buffer):
         await q.put(entry)
 
-    async def _generator():
-        try:
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    entry = await asyncio.wait_for(q.get(), timeout=15.0)
-                    yield {"data": json.dumps(entry)}
-                except asyncio.TimeoutError:
-                    yield {"data": json.dumps({"ping": True})}
-        finally:
-            state.sse_queues.discard(q)
-
-    return EventSourceResponse(_generator())
+    return EventSourceResponse(_sse_stream(request, q, state.sse_queues))
 
 
 @app.get("/api/replies", dependencies=[Depends(_check_auth)])
@@ -410,20 +389,7 @@ async def stream_replies(request: Request):
     q: asyncio.Queue = asyncio.Queue(maxsize=200)
     state.reply_queues.add(q)
 
-    async def _generator():
-        try:
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    entry = await asyncio.wait_for(q.get(), timeout=15.0)
-                    yield {"data": json.dumps(entry)}
-                except asyncio.TimeoutError:
-                    yield {"data": json.dumps({"ping": True})}
-        finally:
-            state.reply_queues.discard(q)
-
-    return EventSourceResponse(_generator())
+    return EventSourceResponse(_sse_stream(request, q, state.reply_queues))
 
 
 @app.websocket("/api/ws/replies")
@@ -448,10 +414,10 @@ async def ws_replies(websocket: WebSocket):
     try:
         while True:
             try:
-                entry = await asyncio.wait_for(q.get(), timeout=15.0)
-                await websocket.send_text(json.dumps(entry))
+                entry = await asyncio.wait_for(q.get(), timeout=_STREAM_PING_SECONDS)
             except asyncio.TimeoutError:
-                await websocket.send_text(json.dumps({"ping": True}))
+                entry = {"ping": True}
+            await websocket.send_text(json.dumps(entry))
     except WebSocketDisconnect:
         pass
     except Exception as exc:
@@ -470,8 +436,6 @@ async def get_transcript(
 
     Hard-capped in storage (200/channel) and by `limit` (max 200).
     """
-    import core.transcript as transcript
-
     if not chat_id:
         raise HTTPException(status_code=400, detail="chat_id required")
     msgs = transcript.list_messages(chat_id, channel=channel or "pipeline", limit=limit)
@@ -562,17 +526,12 @@ async def inject_message(request: Request):
     if attachments:
         metadata["attachments"] = attachments
 
-    envelope = {
-        "id": str(uuid.uuid4()),
-        "parent_id": None,
-        "direction": "inbound",
-        "source": source,
-        "source_meta": source_meta,
-        "text": text,
-        "pipeline_text": text,
-        "depth": 0,
-        "metadata": metadata,
-    }
+    envelope = new_envelope(
+        source=source,
+        text=text,
+        source_meta=source_meta,
+        metadata=metadata,
+    )
     if target:
         # Validated when the inbound worker runs (handler may not be loaded yet)
         envelope["_target"] = target
@@ -588,18 +547,11 @@ async def webhook(token: str, request: Request):
 
     body = await request.json()
     text = body.get("text", body.get("message", str(body)))
-    envelope = {
-        "id": str(uuid.uuid4()),
-        "parent_id": None,
-        "direction": "inbound",
-        "source": "webhook",
-        "source_meta": {"remote": str(request.client)},
-        "text": text,
-        "pipeline_text": text,
-        "depth": 0,
-        "metadata": {},
-    }
-    mid = queue.enqueue_inbound(envelope)
+    mid = queue.enqueue_inbound(new_envelope(
+        source="webhook",
+        text=text,
+        source_meta={"remote": str(request.client)},
+    ))
     return {"id": mid, "status": "queued"}
 
 

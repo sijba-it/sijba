@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
-import shlex
 from pathlib import Path
 from typing import Any, Dict
+
+import httpx
 
 import core.log as log
 import core.state as state
@@ -25,19 +25,6 @@ def resolve_env(handler: dict) -> dict:
     for key, val in (handler.get("env") or {}).items():
         merged[key] = os.path.expandvars(val)
     return merged
-
-
-def _render(template: str, envelope: dict) -> str:
-    """Replace {{key}} placeholders from envelope fields."""
-    def _replace(m: re.Match) -> str:
-        key = m.group(1).strip()
-        val = envelope.get(key, "")
-        return str(val) if val is not None else ""
-    return re.sub(r"\{\{(\w+)\}\}", _replace, template)
-
-
-def _render_args(args: list, envelope: dict) -> list:
-    return [_render(a, envelope) for a in args]
 
 
 def _resolve_exec(exec_path: str, config_dir: Path) -> str:
@@ -101,43 +88,36 @@ async def _invoke_per_message(handler: Dict[str, Any], envelope: dict, config_di
     htype = handler.get("type", "exec_json")
     if htype == "exec_json":
         return await _exec_json(handler, envelope, config_dir)
-    elif htype == "exec_raw":
-        return await _exec_raw(handler, envelope, config_dir)
-    elif htype == "http":
-        # per_message http: POST once and done
+    if htype == "http":
         return await _http_once(handler, envelope)
-    else:
-        _logger.error(f"Unknown handler type '{htype}'")
-        return {"continue": True}
+    _logger.error(f"Unknown handler type '{htype}'")
+    return {"continue": True}
 
 
 async def _exec_json(handler: dict, envelope: dict, config_dir: Path) -> dict:
+    """Spawn the plugin, hand it the envelope as JSON on stdin, read a JSON
+    response back from stdout."""
     exec_path = _resolve_exec(handler.get("exec", ""), config_dir)
-    args = _render_args(handler.get("args", []), envelope)
-    stdin_template = handler.get("stdin", "")
-    if stdin_template:
-        stdin_data = _render(stdin_template, envelope).encode()
-    else:
-        stdin_data = json.dumps(envelope).encode()
-
     timeout = handler.get("timeout_seconds", 10)
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            exec_path, *args,
+            exec_path, *handler.get("args", []),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=resolve_env(handler),
         )
         stdout, stderr = await asyncio.wait_for(
-            proc.communicate(stdin_data), timeout=timeout
+            proc.communicate(json.dumps(envelope).encode()), timeout=timeout
         )
     except asyncio.TimeoutError:
         _logger.error(f"[{handler['id']}] exec_json timed out after {timeout}s")
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
         return {"continue": True}
     except Exception as exc:
         _logger.error(f"[{handler['id']}] exec_json error: {exc}")
@@ -153,53 +133,16 @@ async def _exec_json(handler: dict, envelope: dict, config_dir: Path) -> dict:
         return {"continue": True}
 
 
-async def _exec_raw(handler: dict, envelope: dict, config_dir: Path) -> dict:
-    exec_path = _resolve_exec(handler.get("exec", ""), config_dir)
-    args = _render_args(handler.get("args", []), envelope)
-    timeout = handler.get("timeout_seconds", 10)
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            exec_path, *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=resolve_env(handler),
-        )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout
-        )
-    except asyncio.TimeoutError:
-        _logger.error(f"[{handler['id']}] exec_raw timed out after {timeout}s")
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        return {"continue": True}
-    except Exception as exc:
-        _logger.error(f"[{handler['id']}] exec_raw error: {exc}")
-        return {"continue": True}
-
-    if stderr:
-        _logger.debug(f"[{handler['id']}] stderr: {stderr.decode().rstrip()}")
-
-    do_continue = proc.returncode == 0
-    response: dict = {"continue": do_continue}
-    if handler.get("capture_stdout") and stdout:
-        response["pipeline_text"] = stdout.decode().rstrip("\n")
-    return response
-
-
 async def _http_once(handler: dict, envelope: dict) -> dict:
+    """POST the envelope to a remote handler (see registry.register)."""
     startup = handler.get("startup") or {}
-    base_url = startup.get("url", "")
-    invoke_path = startup.get("invoke_path", "/invoke")
-    url = base_url.rstrip("/") + invoke_path
-    timeout = handler.get("timeout_seconds", 10)
+    url = startup.get("url", "").rstrip("/") + startup.get("invoke_path", "/invoke")
     try:
-        import httpx
         async with httpx.AsyncClient() as client:
-            r = await client.post(url, json=envelope, timeout=timeout)
+            r = await client.post(
+                url, json=envelope, timeout=handler.get("timeout_seconds", 10)
+            )
             return r.json()
     except Exception as exc:
-        _logger.error(f"[{handler['id']}] http once error: {exc}")
+        _logger.error(f"[{handler['id']}] http invoke error: {exc}")
         return {"continue": True}

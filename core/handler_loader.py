@@ -23,7 +23,6 @@ DEFAULTS: Dict[str, Any] = {
     "allow_direct_inject": False,
     "continue_on_match": True,
     "args": [],
-    "capture_stdout": False,
     "timeout_seconds": 10,
 }
 

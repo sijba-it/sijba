@@ -2,132 +2,101 @@
 from __future__ import annotations
 import asyncio
 import json
-import sqlite3
-import threading
 import uuid
-from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional
 
+import core.db as db
 import core.log as log
 
 _logger = log.get("queue")
-_lock = threading.Lock()
-_conn: Optional[sqlite3.Connection] = None
+
+INBOUND = "inbound_queue"
+OUTBOUND = "outbound_queue"
+
+_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS {table} (
+        id          TEXT PRIMARY KEY,
+        envelope_json TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'pending',
+        depth       INTEGER NOT NULL DEFAULT 0,
+        created_at  TEXT NOT NULL,
+        claimed_at  TEXT
+    );
+"""
 
 
-def init(db_path: str) -> None:
-    global _conn
-    _conn = sqlite3.connect(db_path, check_same_thread=False)
-    _conn.execute("PRAGMA journal_mode=WAL")
-    _conn.executescript("""
-        CREATE TABLE IF NOT EXISTS inbound_queue (
-            id          TEXT PRIMARY KEY,
-            envelope_json TEXT NOT NULL,
-            status      TEXT NOT NULL DEFAULT 'pending',
-            depth       INTEGER NOT NULL DEFAULT 0,
-            created_at  TEXT NOT NULL,
-            claimed_at  TEXT
-        );
-        CREATE TABLE IF NOT EXISTS outbound_queue (
-            id          TEXT PRIMARY KEY,
-            envelope_json TEXT NOT NULL,
-            status      TEXT NOT NULL DEFAULT 'pending',
-            depth       INTEGER NOT NULL DEFAULT 0,
-            created_at  TEXT NOT NULL,
-            claimed_at  TEXT
-        );
-    """)
-    _conn.commit()
+def init() -> None:
+    with db.write() as conn:
+        conn.executescript(_SCHEMA.format(table=INBOUND) + _SCHEMA.format(table=OUTBOUND))
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def enqueue(table: str, envelope: dict) -> str:
+    mid = envelope.setdefault("id", str(uuid.uuid4()))
+    db.execute(
+        f"INSERT OR IGNORE INTO {table} (id, envelope_json, status, depth, created_at)"
+        " VALUES (?, ?, 'pending', ?, ?)",
+        (mid, json.dumps(envelope), envelope.get("depth", 0), db.now()),
+    )
+    _logger.debug(f"Enqueued {table} {mid}")
+    return mid
 
 
 def enqueue_inbound(envelope: dict) -> str:
-    mid = envelope.setdefault("id", str(uuid.uuid4()))
-    with _lock:
-        _conn.execute(
-            "INSERT OR IGNORE INTO inbound_queue (id, envelope_json, status, depth, created_at)"
-            " VALUES (?, ?, 'pending', ?, ?)",
-            (mid, json.dumps(envelope), envelope.get("depth", 0), _now()),
-        )
-        _conn.commit()
-    _logger.debug(f"Enqueued inbound {mid}")
-    return mid
+    return enqueue(INBOUND, envelope)
 
 
 def enqueue_outbound(envelope: dict) -> str:
-    mid = envelope.setdefault("id", str(uuid.uuid4()))
-    with _lock:
-        _conn.execute(
-            "INSERT OR IGNORE INTO outbound_queue (id, envelope_json, status, depth, created_at)"
-            " VALUES (?, ?, 'pending', ?, ?)",
-            (mid, json.dumps(envelope), envelope.get("depth", 0), _now()),
-        )
-        _conn.commit()
-    _logger.debug(f"Enqueued outbound {mid}")
-    return mid
+    return enqueue(OUTBOUND, envelope)
 
 
 def _claim_next(table: str) -> Optional[tuple[str, dict]]:
-    with _lock:
-        row = _conn.execute(
+    with db.write() as conn:
+        row = conn.execute(
             f"SELECT id, envelope_json FROM {table}"
             " WHERE status = 'pending' ORDER BY created_at LIMIT 1"
         ).fetchone()
         if not row:
             return None
         mid, env_json = row
-        _conn.execute(
+        conn.execute(
             f"UPDATE {table} SET status = 'claimed', claimed_at = ? WHERE id = ?",
-            (_now(), mid),
+            (db.now(), mid),
         )
-        _conn.commit()
     return mid, json.loads(env_json)
 
 
 def _set_status(table: str, mid: str, status: str) -> None:
-    with _lock:
-        _conn.execute(f"UPDATE {table} SET status = ? WHERE id = ?", (status, mid))
-        _conn.commit()
+    db.execute(f"UPDATE {table} SET status = ? WHERE id = ?", (status, mid))
 
 
 def depths() -> dict:
-    with _lock:
-        def counts(table: str) -> dict:
-            rows = _conn.execute(
-                f"SELECT status, COUNT(*) FROM {table} GROUP BY status"
-            ).fetchall()
-            return {r[0]: r[1] for r in rows}
-        return {"inbound": counts("inbound_queue"), "outbound": counts("outbound_queue")}
+    def counts(table: str) -> dict:
+        rows = db.query(f"SELECT status, COUNT(*) FROM {table} GROUP BY status")
+        return {r[0]: r[1] for r in rows}
+
+    return {"inbound": counts(INBOUND), "outbound": counts(OUTBOUND)}
+
+
+async def run_worker(table: str, fn: Callable[[dict], Awaitable[None]]) -> None:
+    """Claim and process one message at a time; never let one failure stall
+    the queue."""
+    while True:
+        claimed = _claim_next(table)
+        if not claimed:
+            await asyncio.sleep(0.05)
+            continue
+        mid, env = claimed
+        try:
+            await fn(env)
+            _set_status(table, mid, "done")
+        except Exception as exc:
+            _logger.error(f"{table} worker error [{mid}]: {exc}")
+            _set_status(table, mid, "failed")
 
 
 async def run_inbound_worker(fn: Callable[[dict], Awaitable[None]]) -> None:
-    while True:
-        result = _claim_next("inbound_queue")
-        if result:
-            mid, env = result
-            try:
-                await fn(env)
-                _set_status("inbound_queue", mid, "done")
-            except Exception as exc:
-                _logger.error(f"Inbound worker error [{mid}]: {exc}")
-                _set_status("inbound_queue", mid, "failed")
-        else:
-            await asyncio.sleep(0.05)
+    await run_worker(INBOUND, fn)
 
 
 async def run_outbound_worker(fn: Callable[[dict], Awaitable[None]]) -> None:
-    while True:
-        result = _claim_next("outbound_queue")
-        if result:
-            mid, env = result
-            try:
-                await fn(env)
-                _set_status("outbound_queue", mid, "done")
-            except Exception as exc:
-                _logger.error(f"Outbound worker error [{mid}]: {exc}")
-                _set_status("outbound_queue", mid, "failed")
-        else:
-            await asyncio.sleep(0.05)
+    await run_worker(OUTBOUND, fn)

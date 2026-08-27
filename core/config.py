@@ -17,11 +17,7 @@ DEFAULTS: Dict[str, Any] = {
     "upload_dir": None,
 }
 
-_cfg: Dict[str, Any] = {}
-
-
 def load() -> Dict[str, Any]:
-    global _cfg
     config_dir = Path(os.environ.get("SIJBA_CONFIG_DIR", "./sijba-config"))
 
     cfg = dict(DEFAULTS)
@@ -47,11 +43,4 @@ def load() -> Dict[str, Any]:
 
     cfg["port"] = int(cfg["port"])
     cfg["max_inject_depth"] = int(cfg["max_inject_depth"])
-    _cfg = cfg
     return cfg
-
-
-def get() -> Dict[str, Any]:
-    if not _cfg:
-        return load()
-    return _cfg

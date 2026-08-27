@@ -36,6 +36,7 @@ app.add_middleware(
 
 _auth_token: Optional[str] = None
 _webhook_token: Optional[str] = None
+_webhooks: dict = {}  # token -> name, from the `webhooks:` config block
 _config_dir: Optional[Path] = None
 _reload_fn = None  # injected by main.py
 _upload_dir: Optional[Path] = None
@@ -44,10 +45,12 @@ _upload_dir: Optional[Path] = None
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
-def configure(auth_token: str, webhook_token: str, config_dir: Path, reload_fn, upload_dir: Path) -> None:
-    global _auth_token, _webhook_token, _config_dir, _reload_fn, _upload_dir
+def configure(auth_token: str, webhook_token: str, config_dir: Path, reload_fn,
+              upload_dir: Path, webhooks: dict = None) -> None:
+    global _auth_token, _webhook_token, _webhooks, _config_dir, _reload_fn, _upload_dir
     _auth_token = auth_token
     _webhook_token = webhook_token
+    _webhooks = webhooks or {}
     _config_dir = config_dir
     _reload_fn = reload_fn
     _upload_dir = upload_dir
@@ -257,7 +260,7 @@ async def _handle_plugin_reply_chunk(msg: dict) -> None:
         parent_id=ctx.get("parent_id") or envelope_id,
         handler_id=f"plugin:{channel_id}",
         event="reply_chunk",
-        persist=False,
+        final=False,
     )
 
 
@@ -540,19 +543,56 @@ async def inject_message(request: Request):
     return {"id": mid, "status": "queued", "target": target}
 
 
+def _webhook_source(token: str) -> Optional[str]:
+    """Resolve a webhook token to the source it speaks as, or None to reject.
+
+    The token *is* the identity, so the source cannot be spoofed by the
+    caller. Named webhooks become "webhook:<name>"; the single legacy
+    `webhook_token` stays plain "webhook".
+    """
+    name = _webhooks.get(token)
+    if name:
+        return f"webhook:{name}"
+    if _webhook_token and token == _webhook_token:
+        return "webhook"
+    if not _webhook_token and not _webhooks:
+        return "webhook"  # no webhook auth configured at all
+    return None
+
+
 @app.post("/webhook/{token}")
 async def webhook(token: str, request: Request):
-    if _webhook_token and token != _webhook_token:
+    """Inject a message from an external system (voice shortcut, IoT, ...).
+
+    Which webhook the token belongs to decides the envelope source, so each
+    one can be routed — and answered — differently via match.source.
+
+    Body:
+      text / message  the message (falls back to the raw body)
+      chat_id         (optional) transcript to record this under, which is how
+                      the reply becomes visible in the app
+      target          (optional) handler id, category, or plugin channel
+    """
+    source = _webhook_source(token)
+    if source is None:
+        _logger.warning(f"webhook: rejected unknown token from {request.client}")
         raise HTTPException(status_code=403, detail="Invalid token")
 
     body = await request.json()
     text = body.get("text", body.get("message", str(body)))
-    mid = queue.enqueue_inbound(new_envelope(
-        source="webhook",
-        text=text,
-        source_meta={"remote": str(request.client)},
-    ))
-    return {"id": mid, "status": "queued"}
+
+    source_meta = {"remote": str(request.client)}
+    if body.get("chat_id") is not None:
+        source_meta["chat_id"] = str(body["chat_id"])
+
+    envelope = new_envelope(source=source, text=text, source_meta=source_meta)
+    target = (str(body.get("target") or "").strip()) or None
+    if target:
+        envelope["_target"] = target
+
+    mid = queue.enqueue_inbound(envelope)
+    _logger.info(f"webhook [{source}]: {text[:120]!r}")
+    return {"id": mid, "status": "queued", "source": source}
 
 
 # ------------------------------------------------------------------

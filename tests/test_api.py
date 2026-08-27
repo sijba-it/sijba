@@ -367,3 +367,92 @@ async def test_plugin_channels_endpoint(aclient):
 
     assert [c["channel_id"] for c in body] == ["projekt-a"]
     assert body[0]["triggers"] == ["@projekt-a"]
+
+
+# ------------------------------------------------------------------
+# Named webhooks: the token decides the source
+# ------------------------------------------------------------------
+
+@pytest.fixture
+def multi_client(tmp_path, db):
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    api.configure(
+        auth_token="tok", webhook_token="legacy", config_dir=tmp_path,
+        reload_fn=lambda: None, upload_dir=uploads,
+        webhooks={"tok-voice": "voice", "tok-iot": "iot"},
+    )
+    with TestClient(api.app) as c:
+        yield c
+
+
+def test_named_token_sets_the_source(multi_client):
+    r = multi_client.post("/webhook/tok-voice", json={"text": "licht an"})
+
+    assert r.status_code == 200
+    assert r.json()["source"] == "webhook:voice"
+    assert _first_queued()["source"] == "webhook:voice"
+
+
+def test_each_token_gets_its_own_source(multi_client):
+    multi_client.post("/webhook/tok-iot", json={"text": "x"})
+    assert _first_queued()["source"] == "webhook:iot"
+
+
+def test_legacy_single_token_still_works(multi_client):
+    r = multi_client.post("/webhook/legacy", json={"text": "x"})
+
+    assert r.json()["source"] == "webhook"
+
+
+def test_unknown_token_is_rejected(multi_client):
+    assert multi_client.post("/webhook/nope", json={"text": "x"}).status_code == 403
+
+
+def test_source_cannot_be_set_from_the_body(multi_client):
+    """The token is the identity — a caller must not be able to relabel
+    itself and reach handlers scoped to another source."""
+    multi_client.post(
+        "/webhook/tok-voice", json={"text": "x", "source": "iot"}
+    )
+
+    assert _first_queued()["source"] == "webhook:voice"
+
+
+def test_webhook_source_is_namespaced_away_from_trusted_sources(tmp_path, db):
+    """Even a webhook *named* "web" cannot become the source "web"."""
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    api.configure(
+        auth_token="tok", webhook_token=None, config_dir=tmp_path,
+        reload_fn=lambda: None, upload_dir=uploads,
+        webhooks={"t": "web"},
+    )
+    with TestClient(api.app) as c:
+        c.post("/webhook/t", json={"text": "x"})
+
+    assert _first_queued()["source"] == "webhook:web"
+
+
+def test_no_webhook_config_accepts_anything(noauth_client):
+    """Unconfigured stays permissive for local development."""
+    r = noauth_client.post("/webhook/whatever", json={"text": "x"})
+
+    assert r.status_code == 200
+    assert r.json()["source"] == "webhook"
+
+
+def test_webhook_chat_id_and_target(multi_client):
+    multi_client.post(
+        "/webhook/tok-voice",
+        json={"text": "x", "chat_id": "voice", "target": "projekt-a"},
+    )
+
+    env = _first_queued()
+    assert env["source_meta"]["chat_id"] == "voice"
+    assert env["_target"] == "projekt-a"
+
+
+def test_webhook_falls_back_to_message_key(multi_client):
+    multi_client.post("/webhook/tok-voice", json={"message": "von aussen"})
+    assert _first_queued()["text"] == "von aussen"

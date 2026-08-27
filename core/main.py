@@ -19,6 +19,7 @@ import core.handler_loader as handler_loader
 import core.lifecycle as lifecycle
 import core.pipeline as pipeline
 import core.registry as registry
+import core.reply as reply
 from core.envelope import new_envelope
 from core.web.api import app, configure as configure_api
 
@@ -95,6 +96,7 @@ async def main() -> None:
     registry.rebuild()
 
     # Wire pipeline
+    reply.configure(enqueue_outbound=queue.enqueue_outbound)
     pipeline.configure(
         enqueue_inbound=queue.enqueue_inbound,
         enqueue_outbound=queue.enqueue_outbound,
@@ -109,7 +111,10 @@ async def main() -> None:
         config_dir=config_dir,
         reload_fn=lambda: _do_reload(cfg),
         upload_dir=upload_dir,
+        webhooks=cfg.get("webhooks"),
     )
+    for name in sorted(set((cfg.get("webhooks") or {}).values())):
+        _logger.info(f"Webhook configured: webhook:{name}")
 
     # Start persistent handlers (including sources)
     await lifecycle.start_all(state.handlers, config_dir, _source_callback)

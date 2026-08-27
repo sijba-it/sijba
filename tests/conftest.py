@@ -17,6 +17,7 @@ import core.db as database  # noqa: E402
 import core.msg_queue as queue  # noqa: E402
 import core.pipeline as pipeline  # noqa: E402
 import core.registry as registry  # noqa: E402
+import core.reply as reply  # noqa: E402
 import core.state as state  # noqa: E402
 import core.store as store  # noqa: E402
 import core.transcript as transcript  # noqa: E402
@@ -63,6 +64,7 @@ def wired(tmp_path):
     Returns (inbound, outbound) lists that collect what the pipeline enqueues.
     """
     inbound, outbound = Sent(), Sent()
+    reply.configure(enqueue_outbound=outbound.append)
     pipeline.configure(
         enqueue_inbound=inbound.append,
         enqueue_outbound=outbound.append,

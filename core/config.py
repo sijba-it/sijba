@@ -1,10 +1,15 @@
 """Load core.yaml from SIJBA_CONFIG_DIR, override with env vars."""
 from __future__ import annotations
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict
 
 import yaml
+
+import core.log as log
+
+_logger = log.get("config")
 
 DEFAULTS: Dict[str, Any] = {
     "port": 8080,
@@ -15,7 +20,42 @@ DEFAULTS: Dict[str, Any] = {
     "log_buffer_size": 1000,
     "db_path": "sijba.db",
     "upload_dir": None,
+    "webhooks": {},
 }
+
+
+def _webhook_tokens(raw: Any) -> Dict[str, str]:
+    """Turn the `webhooks:` block ({name: token}) into {token: name}.
+
+    Token values support ``${VAR}`` so the names can live in a ConfigMap while
+    the secrets stay in the environment, the same convention handler `env`
+    blocks use. An unresolved ``${VAR}`` is dropped rather than registered
+    verbatim — otherwise a missing variable would silently create a webhook
+    whose token is the literal, guessable string "${VAR}".
+    """
+    if not raw:
+        return {}
+    if not isinstance(raw, dict):
+        _logger.error("config: 'webhooks' must be a mapping of name -> token")
+        return {}
+
+    out: Dict[str, str] = {}
+    for name, token in raw.items():
+        slug = re.sub(r"[^a-z0-9_-]", "", str(name).strip().lower())[:32]
+        value = os.path.expandvars(str(token or "")).strip()
+        if not slug:
+            _logger.error(f"config: webhook name {name!r} is not a usable slug — skipped")
+            continue
+        if not value or "${" in value:
+            _logger.error(f"config: webhook '{slug}' has no resolved token — skipped")
+            continue
+        if value in out:
+            _logger.error(
+                f"config: webhook '{slug}' reuses the token of '{out[value]}' — skipped"
+            )
+            continue
+        out[value] = slug
+    return out
 
 def load() -> Dict[str, Any]:
     config_dir = Path(os.environ.get("SIJBA_CONFIG_DIR", "./sijba-config"))
@@ -43,4 +83,5 @@ def load() -> Dict[str, Any]:
 
     cfg["port"] = int(cfg["port"])
     cfg["max_inject_depth"] = int(cfg["max_inject_depth"])
+    cfg["webhooks"] = _webhook_tokens(cfg.get("webhooks"))
     return cfg

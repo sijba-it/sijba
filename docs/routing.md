@@ -40,6 +40,27 @@ Each handler declares a `match.regex`. Messages that don't match simply pass to 
 **Pros:** Deterministic, auditable, zero hallucination risk.  
 **Use for:** All action-taking plugins (device control, system commands, etc.)
 
+### Plugin channels are addressed by @mention
+
+Channels registered over the plugin WebSocket are matched on their `triggers`
+instead, and **only as an explicit `@mention` at the start of the message**.
+A bare word would hijack any sentence beginning with it — "Recherche zu Thema X"
+is a message *about* research, not one addressed to the Recherche agent.
+
+Triggers registered without an `@` are normalised to their `@` form rather than
+ignored, so a plugin does not have to be redeployed in lockstep with core. A
+channel that registers no triggers at all is still reachable as `@<channel_id>`.
+
+This applies to message *text* only. Choosing a channel explicitly — the UI
+sidebar, or `target` on `/api/message` and `/webhook/{token}` — matches on
+`channel_id` and needs no mention:
+
+```bash
+# Same channel, two ways in
+-d '{"text": "@Recherche fix the failing test"}'
+-d '{"text": "fix the failing test", "target": "cursor-recherche"}'
+```
+
 ---
 
 ## Category routing

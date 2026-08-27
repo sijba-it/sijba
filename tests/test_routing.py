@@ -381,3 +381,76 @@ async def test_outbound_handlers_filtered_by_source(wired, db, calls):
         | {"_respond_target": "source"}
     )
     assert ids(calls) == ["tg-out", "web-out"]
+
+
+# ------------------------------------------------------------------
+# Fallback must not double-process
+# ------------------------------------------------------------------
+
+async def test_pipeline_fallback_cancels_the_plugin_redelivery(wired, db, calls):
+    """Regression: an @-matched but offline plugin used to keep the message
+    stashed for redelivery *and* let the pipeline answer it, so the plugin
+    processed the same turn again after reconnecting."""
+    import core.registry as registry
+
+    register_channel("cursor", "projekt-a", triggers=["@projekt-a"],
+                     ws=FakeWS(fail=True))
+    install(handler("echo", priority=99.0))
+
+    await pipeline.process_inbound(envelope("@projekt-a mach was"))
+
+    assert ids(calls) == ["echo"], "pipeline handled it"
+    assert registry.peek_pending_reply("env-1") is None, \
+        "must not also be queued for the plugin"
+
+    fresh = FakeWS()
+    register_channel("cursor", "projekt-a", triggers=["@projekt-a"], ws=fresh)
+    assert await registry.redeliver_pending_for_channel("projekt-a") == 0
+
+
+async def test_explicit_target_keeps_the_redelivery(wired, db, calls):
+    """The opposite case: with an explicit target there is no fallback, so
+    the message must stay queued for the channel."""
+    import core.registry as registry
+
+    register_channel("cursor", "projekt-a", ws=FakeWS(fail=True))
+    install(handler("echo", priority=99.0))
+
+    await pipeline.process_inbound(envelope("hallo", _target="projekt-a"))
+
+    assert ids(calls) == [], "no fallback for an explicitly chosen channel"
+    assert registry.peek_pending_reply("env-1") is not None, \
+        "must survive for redelivery on reconnect"
+
+
+# ------------------------------------------------------------------
+# The router closes the loop: message -> router -> channel
+# ------------------------------------------------------------------
+
+async def test_router_can_route_a_plain_message_to_a_plugin_channel(wired, db, calls):
+    """End-to-end: a message with no @ and no target reaches the right
+    channel purely because the router picked it.
+
+    The router emits the channel's trigger, that gets injected as a new
+    inbound message, and the trigger match then routes it — no extra
+    routing path needed.
+    """
+    inbound, _ = wired
+    ws = register_channel("cursor", "projekt-a", triggers=["@projekt-a"])
+    install(handler("router", priority=90.0), handler("echo", priority=99.0))
+    calls.responses["router"] = {
+        "continue": False,
+        "inject": {"text": "@projekt-a mach das licht an"},
+    }
+
+    await pipeline.process_inbound(envelope("mach das licht an"))
+
+    assert ids(calls) == ["router"], "echo must not answer instead"
+    assert len(inbound) == 1, "router's choice was re-queued"
+
+    # The queue worker would hand it straight back to process_inbound.
+    await pipeline.process_inbound(inbound[0])
+
+    assert ws.messages_for("projekt-a"), "router's pick never reached the channel"
+    assert ws.messages_for("projekt-a")[0]["payload"]["text"] == \
+        "@projekt-a mach das licht an"

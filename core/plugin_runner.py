@@ -56,14 +56,19 @@ async def invoke(handler: Dict[str, Any], envelope: dict, config_dir: Path) -> d
         ctx_data = store.get(namespace, key) or {}
         envelope = {**envelope, "context": ctx_data}
 
-    # Enrich envelope with handler summaries if handler opts in
+    # Enrich envelope with everything a router can route to: file/remote
+    # handlers *and* live plugin channels. Without the channels a router is
+    # blind to Cursor/Claude and can only ever answer "no route".
     if handler.get("receive_handler_context"):
-        handler_summaries = [
+        import core.registry as registry
+
+        summaries = [
             {"id": h["id"], "router_hint": h["router_hint"]}
             for h in state.handlers
-            if h.get("router_hint")
+            if h.get("router_hint") and h["id"] != handler["id"]
         ]
-        envelope = {**envelope, "handlers": handler_summaries}
+        summaries += registry.channel_routing_targets()
+        envelope = {**envelope, "handlers": summaries}
 
     lifecycle = handler.get("lifecycle", "per_message")
 

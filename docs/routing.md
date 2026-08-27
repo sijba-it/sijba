@@ -81,13 +81,24 @@ field into the envelope before invoking the plugin:
 
 ```json
 "handlers": [
-  { "id": "iobroker", "router_hint": "Controls smart home devices..." },
-  { "id": "llm",      "router_hint": "General-purpose assistant..." }
+  { "id": "iobroker",   "router_hint": "Controls smart home devices..." },
+  { "id": "@projekt-a", "router_hint": "Cursor agent for project A" }
 ]
 ```
 
-Only handlers that have a `router_hint` are included. The plugin uses this list to
-understand the full capability landscape and make routing decisions.
+The list contains two kinds of target:
+
+- **Handlers** with a `router_hint` (file-based and remotely registered ones).
+- **Live plugin channels** from the WebSocket registry. These are listed under
+  their `@` trigger rather than their channel id, because that is what a router
+  has to emit — see [Router plugin pattern](#router-plugin-pattern).
+
+The handler asking for the list is never offered itself, since routing to
+itself would just loop until `max_inject_depth`.
+
+Without the channels a router is blind to Cursor/Claude and can only ever
+answer "no route", so a setup whose only real targets are plugin channels
+would burn an LLM call per message for nothing.
 
 ---
 
@@ -138,6 +149,54 @@ user: "mach die blasen an"
   → iobroker: matches, executes
   → responds: "Bubble set to on"
 ```
+
+The same mechanism reaches plugin channels, because a re-injected message goes
+back through the trigger match:
+
+```
+user: "fix the failing test in project A"
+  → router: injects "@projekt-a fix the failing test"
+  → trigger match: @projekt-a → Cursor plugin takes over
+```
+
+If the router has no targets at all it skips the LLM call entirely rather than
+paying for a reply it would have to discard.
+
+---
+
+## One router per source
+
+Handlers are filtered by `match.source`, so several routers can sit at the same
+priority and only the one matching the message's source runs. That gives you
+per-source routing behaviour without a second pipeline:
+
+```
+90.0-router-voice.json     match: { "source": ["webhook:voice"] }
+90.0-router-telegram.json  match: { "source": ["telegram"] }
+90.0-router-web.json       match: { "source": ["web", "app"] }
+```
+
+Give each one its own behaviour with `ROUTER_RULES` in its `env` block — it is
+appended to the routing prompt:
+
+```json
+{
+  "id": "router-voice",
+  "priority": 90.0,
+  "match": { "source": ["webhook:voice"] },
+  "receive_handler_context": true,
+  "continue_on_match": false,
+  "env": {
+    "LLM_API_KEY": "${OPENROUTER_API_KEY}",
+    "ROUTER_RULES": "Input is transcribed speech and may be misspelled. Prefer smart-home targets."
+  }
+}
+```
+
+`POST /webhook/<token>` with `{"source": "voice"}` produces the source
+`webhook:voice`. The label is slugified and always prefixed, so an external
+caller can never claim to be `web`, `app` or `telegram`. Pass a `chat_id` too
+if the reply should show up in a transcript.
 
 ---
 

@@ -321,6 +321,9 @@ async def process_inbound(envelope: dict) -> None:
         if any(pipeline_text.lower().startswith(t.lower()) for t in triggers):
             if await _route_to_plugin_channel(ch, envelope):
                 return  # Plugin takes over
+            # Send failed and we are about to handle it in the pipeline
+            # instead, so the channel must not also answer it on reconnect.
+            registry.discard_pending(envelope["id"])
 
     await _run("inbound", envelope)
 

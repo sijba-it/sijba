@@ -19,7 +19,10 @@ LLM_API_KEY         API key
 LLM_MODEL           Model name (default: gpt-4o-mini)
 LLM_FORMAT          openai (default) | anthropic
 LLM_TEMPERATURE     Temperature (default: 0.2 — low for routing)
-LLM_MAX_TOKENS      Max tokens (default: 256 — routing responses are short)
+LLM_MAX_TOKENS      Max tokens (default: 512 — routing responses are short)
+ROUTER_RULES        Extra instructions appended to the routing prompt. Combined
+                    with `match.source`, this is how you run several routers
+                    that behave differently per input (voice vs Telegram vs web).
 
 Handler config example
 ----------------------
@@ -58,6 +61,10 @@ MODEL       = os.environ.get("LLM_MODEL", "gpt-4o-mini")
 FORMAT      = os.environ.get("LLM_FORMAT", "openai").lower()
 TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.2"))
 MAX_TOKENS  = int(os.environ.get("LLM_MAX_TOKENS", "512"))
+# Extra instructions appended to the routing prompt. This is what makes two
+# router handlers behave differently: give each one its own ROUTER_RULES and
+# scope it to a source with `match.source` (e.g. a voice webhook vs Telegram).
+EXTRA_RULES = os.environ.get("ROUTER_RULES", "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -125,18 +132,21 @@ def _build_system_prompt(handler_summaries: list[dict]) -> str:
         f"- [{h['id']}] {h['router_hint']}"
         for h in handler_summaries
     )
+    extra = f"\n\nADDITIONAL RULES:\n{EXTRA_RULES}" if EXTRA_RULES else ""
     return f"""You are a routing assistant. Your only job is to detect if a message should
-be handled by one of the available plugins and output the correct trigger command.
+be handled by one of the available targets and output the correct trigger command.
 
-Available plugins:
+Available targets:
 {hints}
 
 RULES:
-- If the message clearly matches a plugin → respond with ONLY the exact trigger command.
-  Example: "iobroker set Bubble true"
-- If the message does NOT match any plugin → respond with exactly: NONE
+- If the message clearly matches a target → respond with ONLY the exact trigger
+  command, keeping the rest of the user's request after it.
+  Examples: "iobroker set Bubble true"
+            "@projekt-a fix the failing test"
+- If the message does NOT match any target → respond with exactly: NONE
 
-Do not explain. Do not answer questions. Output only the trigger command or NONE."""
+Do not explain. Do not answer questions. Output only the trigger command or NONE.{extra}"""
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +159,14 @@ def main() -> None:
     handler_summaries = envelope.get("handlers", [])
 
     if not text:
+        print(json.dumps({"continue": True}))
+        return
+
+    # Nothing to route to: the reply could never match a known target, so the
+    # call would be paid for and then discarded.
+    if not handler_summaries:
+        print("[router] no routing targets available, skipping LLM",
+              file=sys.stderr, flush=True)
         print(json.dumps({"continue": True}))
         return
 

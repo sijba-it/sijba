@@ -172,15 +172,6 @@ async def _run(
             _logger.info(
                 f"respond [{src}→{respond_target}]: {respond_text[:120]!r}"
             )
-            _enqueue_outbound(new_envelope(
-                source=src,
-                text=respond_text,
-                direction="outbound",
-                source_meta=envelope.get("source_meta", {}),
-                parent_id=envelope["id"],
-                depth=envelope.get("depth", 0),
-                _respond_target=respond_target,
-            ))
             reply.deliver(
                 text=respond_text,
                 source=src,
@@ -189,6 +180,8 @@ async def _run(
                 parent_id=envelope["id"],
                 handler_id=hid,
                 envelope_id=envelope.get("id"),
+                respond_target=respond_target,
+                depth=envelope.get("depth", 0),
             )
 
         # inject → new inbound message

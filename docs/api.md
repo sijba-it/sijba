@@ -88,6 +88,47 @@ curl -X POST http://localhost:8080/webhook/mytoken \
   -d '{"text": "hello"}'
 ```
 
+Optional body fields:
+
+| Field | Effect |
+|-------|--------|
+| `chat_id` | Records the exchange in that transcript, which is how the reply becomes visible in the app. Without it the message is not stored. |
+| `target` | Handler id, category, or plugin channel — skips routing and goes straight there. |
+
+### Named webhooks
+
+Configure one token per caller in `core.yaml`. The token decides the envelope
+source, so each webhook can be routed — and answered — differently, and a
+caller cannot relabel itself:
+
+```yaml
+webhooks:
+  voice: ${VOICE_WEBHOOK_TOKEN}
+  iot:   ${IOT_WEBHOOK_TOKEN}
+```
+
+Token values expand `${VAR}` from the environment, so the names can live in a
+ConfigMap while the secrets stay in env. An unresolved variable is dropped
+rather than registered verbatim.
+
+`POST /webhook/<token>` then produces source `webhook:voice` or `webhook:iot`.
+The prefix is always applied, so a webhook can never become `web`, `app` or
+`telegram`. The single legacy `webhook_token` still works and stays `webhook`.
+
+```bash
+curl -X POST http://localhost:8080/webhook/$VOICE_WEBHOOK_TOKEN \
+  -H "Content-Type: application/json" \
+  -d '{"text": "mach das licht im bad an", "chat_id": "voice"}'
+# → {"id": "...", "status": "queued", "source": "webhook:voice"}
+```
+
+Route and answer it with handlers scoped to that source:
+
+```
+90.0-router-voice.json  inbound   match: { "source": ["webhook:voice"] }
+95.0-pushover.json      outbound  match: { "source": ["webhook:voice"] }
+```
+
 ---
 
 ## Logs & replies

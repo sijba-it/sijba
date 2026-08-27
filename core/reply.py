@@ -2,8 +2,10 @@
 
 Two paths produce replies — a handler returning `respond` (pipeline.py) and a
 plugin sending {"type": "reply"} over its WebSocket (web/api.py) — and both
-must fan out to live web/app clients *and* persist to the transcript. Keeping
-that in one place stops the two from drifting apart.
+have to reach the same three places: the outbound pipeline (Telegram,
+Pushover, ...), any live web/app client, and the transcript. Keeping that in
+one place stops the two from drifting apart, which is how plugin replies ended
+up skipping the outbound pipeline entirely.
 """
 from __future__ import annotations
 from typing import Optional
@@ -11,8 +13,17 @@ from typing import Optional
 import core.log as log
 import core.state as state
 import core.transcript as transcript
+from core.envelope import new_envelope
 
 _logger = log.get("reply")
+
+# Injected at startup by main.py to avoid a circular import with msg_queue.
+_enqueue_outbound = None
+
+
+def configure(enqueue_outbound) -> None:
+    global _enqueue_outbound
+    _enqueue_outbound = enqueue_outbound
 
 
 def deliver(
@@ -24,15 +35,32 @@ def deliver(
     parent_id: Optional[str],
     handler_id: str,
     envelope_id: Optional[str] = None,
+    respond_target: str = "source",
+    depth: int = 0,
     event: str = "reply",
-    persist: bool = True,
+    final: bool = True,
 ) -> None:
-    """Fan out to connected clients, then store it.
+    """Send a reply out every way it needs to go.
 
-    `persist=False` is for streamed `reply_chunk` deltas — the final `reply`
-    carries the authoritative full text into the transcript.
+    `final=False` is for streamed `reply_chunk` deltas: they go to live
+    clients only, since the final reply carries the authoritative full text
+    into both the transcript and the outbound pipeline.
     """
     source_meta = source_meta or {}
+
+    # Outbound handlers scoped with match.source — this is how a reply gets
+    # back out to the channel it came from (Pushover for a voice webhook,
+    # Telegram for a Telegram message, ...).
+    if final and _enqueue_outbound is not None:
+        _enqueue_outbound(new_envelope(
+            source=source,
+            text=text,
+            direction="outbound",
+            source_meta=source_meta,
+            parent_id=parent_id,
+            depth=depth,
+            _respond_target=respond_target,
+        ))
 
     # Web/app clients have no outbound sink of their own; they listen on SSE/WS.
     if source in ("web", "app"):
@@ -45,7 +73,7 @@ def deliver(
             "channel": channel,
         })
 
-    if not persist:
+    if not final:
         return
 
     # Cross-device replay. Never let a storage hiccup break delivery.

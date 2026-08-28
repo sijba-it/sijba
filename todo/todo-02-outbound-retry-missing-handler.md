@@ -92,6 +92,50 @@ rather than inventing a new one:
 
 ## Status
 
-Not started. Larger than todo-01 — touches `core/pipeline.py`,
-`core/msg_queue.py`, and probably needs a small `outbound_queue` schema
-change (attempt count / first-seen timestamp).
+Done (2026-08-28), with one deliberate change of emphasis and one addition
+to the plan above.
+
+**Changed:** "no handler matched → retry" is *not* applied unconditionally.
+`reply.deliver` enqueues an outbound envelope for every final reply,
+including `source=web`, where no outbound handler matching is the normal
+case (the app listens on the SSE/WS reply stream instead). Retrying those
+would have failed every single chat reply. Retry now applies unless the
+source carries its own return path (`web`, `app`, `internal`) — or unless
+an explicit `respond.target` was named, which must exist whatever the
+source. `tests/test_outbound.py::test_web_replies_are_not_retried` guards
+this.
+
+**Added:** `plugin_runner.invoke` never raises — every error path in
+`_http_once`/`_exec_json` returned a plain `{"continue": True}`. A
+*registered but dead* handler therefore dropped messages just as silently
+as a missing one, which the plan above did not cover. Those paths now
+carry `_error`, and `_run` only counts a handler as having delivered the
+message if it came back without one.
+
+**Root cause removed rather than only worked around:** registrations are
+now persisted to SQLite and restored at startup (`registry.init/restore`,
+table `registered_handlers`), so the registration gap a Core restart used
+to open is closed instead of merely survivable. The advertised URLs are
+stable Service DNS names, so a restored registration still points
+somewhere. Retry is the safety net for what persistence cannot fix — the
+remote itself being down.
+
+Shipped:
+- `core/msg_queue.py` — `Retry` exception, `attempts`/`next_attempt_at`/
+  `last_error` columns (added via `ALTER TABLE`, prod DBs predate them),
+  backoff `5/15/60/300s`, `MAX_ATTEMPTS=5`, 1h TTL, `recover_claimed()`.
+- `core/pipeline.py` — `_run` returns a delivered count;
+  `process_outbound` raises `Retry` when nothing took a message that
+  expected an outbound sink.
+- `core/registry.py` — registration persistence + `restore()`.
+- `core/main.py` — `registry.init/restore`, `queue.recover_claimed()`.
+- `sijba-out-pushover` — `HEARTBEAT_EVERY` 30s → 15s (`TTL/6`).
+- Tests: new `tests/test_outbound.py` (7), queue retry/backoff/recovery in
+  `tests/test_persistence.py` (4), registration persistence in
+  `tests/test_registry.py` (5). The behavioural ones were verified to fail
+  without their fix.
+- Docs: `docs/architecture.md#delivery-guarantees`, `docs/api.md`.
+
+Not done: nothing surfaces `failed` outbound messages in the app. The
+reason is in `last_error` and in the log, but you have to go looking —
+split out as todo-05.

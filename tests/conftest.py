@@ -50,6 +50,7 @@ def db(tmp_path):
     queue.init()
     store.init()
     transcript.init()
+    registry.init()
     return path
 
 

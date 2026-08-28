@@ -22,6 +22,12 @@ def connect(db_path: str) -> sqlite3.Connection:
     return _conn
 
 
+def is_connected() -> bool:
+    """Whether connect() has run. Persistence is optional for callers that
+    also work without a DB (registry, exercised directly in tests)."""
+    return _conn is not None
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 

@@ -7,6 +7,19 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, Optional
 
+# Sources that carry their own live return path (web/app SSE/WS) instead of
+# going out via an outbound handler. Shared by pipeline + queue so msg_queue
+# can surface delivery failures without importing pipeline.
+_SELF_DELIVERING_SOURCES = ("web", "app", "internal")
+
+
+def expects_outbound_delivery(envelope: dict) -> bool:
+    """True when a missing outbound handler is a real delivery failure."""
+    target = envelope.get("_respond_target", "source")
+    if target and target != "source":
+        return True
+    return envelope.get("source", "") not in _SELF_DELIVERING_SOURCES
+
 
 def new_envelope(
     *,

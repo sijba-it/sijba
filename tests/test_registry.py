@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+import core.db as database
 import core.registry as registry
 import core.state as state
 from conftest import FakeWS, handler, install, register_channel
@@ -221,3 +222,82 @@ def test_rebuild_sorts_by_priority():
     registry.register({"id": "pods", "url": "http://x", "priority": 30.0})
 
     assert [h["id"] for h in state.handlers] == ["audit", "pods", "echo"]
+
+
+# ------------------------------------------------------------------
+# Remote registrations across a Core restart
+# ------------------------------------------------------------------
+
+def _register_pushover(**overrides) -> None:
+    body = {
+        "id": "pushover",
+        "url": "http://sijba-out-pushover:9101",
+        "direction": "outbound",
+        "match": {"source": ["webhook:voice"]},
+        "ttl_seconds": 90,
+    }
+    body.update(overrides)
+    registry.register(body)
+
+
+def _restart() -> None:
+    """Everything a Core restart wipes — the registry lives in memory."""
+    state.registered_handlers.clear()
+    state.handler_states.clear()
+    state.handlers = []
+    registry.rebuild()
+
+
+def test_registration_survives_a_restart(db):
+    _register_pushover()
+    _restart()
+    assert state.handlers == [], "sanity: the restart really did wipe it"
+
+    assert registry.restore() == 1
+
+    assert [h["id"] for h in state.handlers] == ["pushover"]
+    assert state.handler_states["pushover"] == "healthy"
+    assert state.handlers[0]["startup"]["url"] == "http://sijba-out-pushover:9101"
+
+
+def test_registration_that_expired_while_down_is_not_restored(db):
+    _register_pushover()
+    # Its owner stopped heartbeating long before Core came back.
+    database.execute("UPDATE registered_handlers SET expires_at = 1 WHERE id = 'pushover'")
+    _restart()
+
+    assert registry.restore() == 0
+    assert state.registered_handlers == {}
+
+
+def test_unregister_also_forgets_the_persisted_registration(db):
+    _register_pushover()
+    assert registry.unregister("pushover") is True
+    _restart()
+
+    assert registry.restore() == 0
+
+
+def test_heartbeat_extends_the_persisted_ttl(db):
+    _register_pushover()
+    before = database.query_one(
+        "SELECT expires_at FROM registered_handlers WHERE id = 'pushover'"
+    )[0]
+
+    assert registry.heartbeat("pushover", 900) is True
+
+    after = database.query_one(
+        "SELECT expires_at FROM registered_handlers WHERE id = 'pushover'"
+    )[0]
+    assert after > before
+
+
+def test_registration_works_without_a_database(monkeypatch):
+    """Persistence is a bonus, not a requirement — registering must not
+    depend on a connected DB."""
+    monkeypatch.setattr(database, "_conn", None)
+
+    _register_pushover()
+
+    assert [h["id"] for h in state.handlers] == ["pushover"]
+    assert registry.restore() == 0

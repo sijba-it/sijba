@@ -7,9 +7,11 @@ Plugin WebSocket registry (persistent external processes like Claude).
 """
 from __future__ import annotations
 import asyncio
+import json
 import time
 from typing import Any, Dict, List, Optional
 
+import core.db as db
 import core.log as log
 import core.state as state
 
@@ -372,6 +374,112 @@ def stop_plugin_cleanup_task() -> None:
         _logger.info("Plugin cleanup task stopped")
 
 
+# ------------------------------------------------------------------
+# Registration persistence
+#
+# Registrations used to live purely in memory, so a Core restart wiped every
+# remote handler until its owner's next heartbeat failed and it re-registered
+# — up to ~30s for sijba-out-pushover, during which outbound messages found
+# no handler at all. The advertised URLs are stable (a k8s Service DNS name),
+# so the registration is still valid after a restart and is simply reloaded.
+# ------------------------------------------------------------------
+
+_PERSIST_TABLE = "registered_handlers"
+
+
+def init() -> None:
+    """Create the table backing registration persistence."""
+    db.execute(f"""
+        CREATE TABLE IF NOT EXISTS {_PERSIST_TABLE} (
+            id            TEXT PRIMARY KEY,
+            handler_json  TEXT NOT NULL,
+            registered_at REAL NOT NULL,
+            expires_at    REAL,
+            ttl_seconds   REAL,
+            updated_at    TEXT NOT NULL
+        )
+    """)
+
+
+def _persist(hid: str, entry: Dict[str, Any]) -> None:
+    """Mirror one registration to disk. Never fatal: a failure here costs the
+    restart window back, not the registration itself."""
+    if not db.is_connected():
+        return
+    try:
+        db.execute(
+            f"INSERT INTO {_PERSIST_TABLE}"
+            " (id, handler_json, registered_at, expires_at, ttl_seconds, updated_at)"
+            " VALUES (?,?,?,?,?,?)"
+            " ON CONFLICT(id) DO UPDATE SET handler_json=excluded.handler_json,"
+            " registered_at=excluded.registered_at, expires_at=excluded.expires_at,"
+            " ttl_seconds=excluded.ttl_seconds, updated_at=excluded.updated_at",
+            (
+                hid,
+                json.dumps(entry["handler"]),
+                entry["registered_at"],
+                entry.get("expires_at"),
+                entry.get("ttl_seconds"),
+                db.now(),
+            ),
+        )
+    except Exception as exc:
+        _logger.warning(f"Persisting registration '{hid}' failed: {exc}")
+
+
+def _forget(hid: str) -> None:
+    if not db.is_connected():
+        return
+    try:
+        db.execute(f"DELETE FROM {_PERSIST_TABLE} WHERE id = ?", (hid,))
+    except Exception as exc:
+        _logger.warning(f"Dropping persisted registration '{hid}' failed: {exc}")
+
+
+def restore() -> int:
+    """Reload registrations that outlived the process. Startup only, after the
+    file handlers are loaded — rebuild() merges against them.
+
+    Entries whose TTL ran out while Core was down are dropped: their owner
+    stopped heartbeating, so it has to register again to be believed."""
+    if not db.is_connected():
+        return 0
+    try:
+        rows = db.query(
+            f"SELECT id, handler_json, registered_at, expires_at, ttl_seconds"
+            f" FROM {_PERSIST_TABLE}"
+        )
+    except Exception as exc:
+        _logger.warning(f"Restoring registrations failed: {exc}")
+        return 0
+
+    now = _now()
+    restored: List[str] = []
+    for hid, handler_json, registered_at, expires_at, ttl_seconds in rows:
+        if expires_at is not None and expires_at < now:
+            _logger.info(f"Persisted registration '{hid}' expired while down — dropping")
+            _forget(hid)
+            continue
+        try:
+            handler = json.loads(handler_json)
+        except ValueError:
+            _logger.warning(f"Persisted registration '{hid}' is unreadable — dropping")
+            _forget(hid)
+            continue
+        state.registered_handlers[hid] = {
+            "handler": handler,
+            "registered_at": registered_at,
+            "expires_at": expires_at,
+            "ttl_seconds": ttl_seconds,
+        }
+        restored.append(hid)
+
+    if restored:
+        rebuild()
+        _logger.info(f"Restored remote handler registrations: {', '.join(sorted(restored))}")
+    return len(restored)
+
+
 def rebuild() -> None:
     """Merge file handlers + registered remotes into state.handlers (sorted)."""
     file_ids = {h["id"] for h in state.file_handlers}
@@ -388,6 +496,7 @@ def rebuild() -> None:
             _logger.info(f"Registered handler '{hid}' expired — removing")
             del state.registered_handlers[hid]
             state.handler_states.pop(hid, None)
+            _forget(hid)
             continue
         merged.append(handler)
         if hid not in state.handler_states:
@@ -451,6 +560,7 @@ def register(body: dict) -> dict:
         "ttl_seconds": ttl_f,
     }
     state.handler_states[hid] = "healthy"
+    _persist(hid, state.registered_handlers[hid])
     rebuild()
     _logger.info(f"Registered remote handler '{hid}' → {url} (ttl={ttl_f})")
     return {
@@ -467,6 +577,7 @@ def unregister(hid: str) -> bool:
         return False
     del state.registered_handlers[hid]
     state.handler_states.pop(hid, None)
+    _forget(hid)
     rebuild()
     _logger.info(f"Unregistered remote handler '{hid}'")
     return True
@@ -483,6 +594,7 @@ def heartbeat(hid: str, ttl_seconds: Optional[float] = None) -> bool:
     else:
         entry["expires_at"] = None
     entry["registered_at"] = _now()
+    _persist(hid, entry)
     return True
 
 
@@ -495,6 +607,7 @@ def expire_stale() -> int:
         if exp is not None and exp < now:
             del state.registered_handlers[hid]
             state.handler_states.pop(hid, None)
+            _forget(hid)
             removed += 1
             _logger.info(f"Expired remote handler '{hid}'")
     if removed:

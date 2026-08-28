@@ -45,6 +45,8 @@ curl -X POST https://sijba.edv-bartl.at/api/register \
 
 `url` must be reachable **from the Core pod**. Use a node IP + hostPort, Tailscale IP, or in-cluster Service URL. Optional `ttl_seconds` — renew via heartbeat or re-register.
 
+Registrations are persisted and reloaded when Core restarts, so a remote handler stays attached across a Core rollout without waiting for its next heartbeat — see [architecture.md](architecture.md#delivery-guarantees). Prefer a stable `url` (a Service DNS name over a pod IP) so the restored registration still points somewhere. One whose TTL expired while Core was down is dropped and has to register again.
+
 ---
 
 ## Messages

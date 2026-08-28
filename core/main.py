@@ -61,7 +61,12 @@ async def main() -> None:
     queue.init()
     store.init()
     transcript.init()
+    registry.init()
     _logger.info(f"Queue/store DB: {db_path}")
+
+    # Nothing is in flight yet, so anything still 'claimed' was orphaned by
+    # however the previous process ended.
+    queue.recover_claimed()
 
     # Uploads — default next to the DB (persistent volume), not config_dir
     # (which is a read-only ConfigMap mount in k8s).
@@ -84,6 +89,10 @@ async def main() -> None:
         else:
             state.handler_states[hid] = "healthy"
     registry.rebuild()
+
+    # Remote handlers registered before the last restart — back immediately,
+    # instead of only once their own heartbeat notices and re-registers.
+    registry.restore()
 
     # Wire pipeline
     reply.configure(enqueue_outbound=queue.enqueue_outbound)

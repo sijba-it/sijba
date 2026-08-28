@@ -199,6 +199,33 @@ async def test_recherche_keyword_routes_to_its_own_channel(voice_chain, wired, d
     ]
 
 
+async def test_obsidian_reply_goes_back_out_as_the_voice_source(voice_chain, wired, db):
+    """The whole point of keeping the origin source: the cursor agent's reply
+    ("→ Einkaufsliste: …") is enqueued outbound as `webhook:voice`, so the
+    voice-scoped outbound handler (Pushover) picks it up — even though it
+    travelled voice → tee/inject → channel as `internal`."""
+    import core.registry as registry
+    import core.web.api as api
+
+    inbound, outbound = wired
+    register_channel("cursor-obs", "obsidian", triggers=["@obsidian"])
+
+    await pipeline.process_inbound(voice_env("Einkauf Kaffee"))
+    await _drain_inbound(inbound)
+
+    child_id = next(
+        eid for eid, entry in registry._pending_replies.items()
+        if "[einkauf]" in entry["payload"]["text"]
+    )
+    await api._handle_plugin_reply(
+        {"channel": "obsidian", "envelope_id": child_id, "text": "→ Einkaufsliste: Kaffee"}
+    )
+
+    assert [(o["source"], o["direction"], o["text"]) for o in outbound] == [
+        ("webhook:voice", "outbound", "→ Einkaufsliste: Kaffee")
+    ]
+
+
 async def test_jinja_filters_and_conditionals_in_inject(voice_chain, wired, db):
     """inject templates are Jinja2, not str.format."""
     import core.state as state

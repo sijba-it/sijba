@@ -137,6 +137,13 @@ Any plugin can return an `inject` field to re-queue a message into the inbound p
 The injected message starts a fresh pipeline run with `depth` incremented.
 `max_inject_depth` (default: 5, set in `core.yaml`) prevents infinite loops.
 
+An injected message runs as `source: "internal"` so `match.source` handlers
+can't loop it back, but core stashes the original external source on it
+(`_origin_source`). If the injected message ends up at a plugin channel, that
+channel's eventual reply is delivered back out as the *original* source — so a
+voice note that a router forwards to `@obsidian` still gets the agent's answer
+pushed back over the `webhook:voice` return path (Pushover).
+
 **Direct inject** — bypass the full pipeline, go straight to one handler:
 ```json
 "inject": { "text": "...", "target": "iobroker" }

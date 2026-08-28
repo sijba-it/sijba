@@ -142,7 +142,19 @@ can't loop it back, but core stashes the original external source on it
 (`_origin_source`). If the injected message ends up at a plugin channel, that
 channel's eventual reply is delivered back out as the *original* source — so a
 voice note that a router forwards to `@obsidian` still gets the agent's answer
-pushed back over the `webhook:voice` return path (Pushover).
+pushed back over the `webhook:voice` return path (Pushover). Only the plugin's
+final `{"type": "reply"}` goes out that way; streamed `reply_chunk` deltas
+(tool calls, partial output) stay on the live SSE/WS stream and are not
+persisted or pushed.
+
+### Plugin-channel exchanges in the transcript
+
+Whatever routes a message to a plugin channel — a direct `target`, an
+`@mention`, or a router's inject — the message *and* the channel's final reply
+are written to the transcript under the **channel's own id** (`chat_id` = the
+originating chat, or the channel id when there is none). So the `cursor:obsidian`
+channel reads as one conversation regardless of which webhook/route triggered
+each turn.
 
 **Direct inject** — bypass the full pipeline, go straight to one handler:
 ```json

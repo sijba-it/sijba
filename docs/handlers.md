@@ -21,7 +21,7 @@ handlers/
   10.0-telegram-source.json
   10.1-telegram-out.json
   20.0-iobroker.json
-  40.0-router.json
+  40.0-router-llm.json
   50.0-llm.json
   99.0-echo.json         → priority 99.0  (runs last)
 ```

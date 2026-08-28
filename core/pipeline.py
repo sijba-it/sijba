@@ -212,6 +212,16 @@ async def _run(
                     parent_id=envelope["id"],
                     depth=depth,
                     metadata=inj.get("metadata") or {},
+                    # Injected messages run as `internal` so match.source can't
+                    # loop them back through source-scoped handlers — but the
+                    # real external source is remembered so a reply that
+                    # eventually comes back from a plugin channel still reaches
+                    # that source's outbound handler (e.g. Pushover for voice).
+                    _origin_source=envelope.get("_origin_source") or envelope.get("source"),
+                    _origin_source_meta=(
+                        envelope.get("_origin_source_meta")
+                        or envelope.get("source_meta") or {}
+                    ),
                 )
                 inj_target = inj.get("target")
                 target_handlers = _resolve_inject_target(inj_target)
@@ -251,8 +261,14 @@ async def _route_to_plugin_channel(ch: dict, envelope: dict) -> bool:
         "attachments": (envelope.get("metadata") or {}).get("attachments", []),
     }
     reply_context = {
-        "source": envelope.get("source"),
-        "source_meta": envelope.get("source_meta", {}),
+        # For an injected message `source` is "internal"; `_origin_source` is
+        # the external source it descends from, which is where a reply has to
+        # go back out (Pushover, Telegram, the web client, ...).
+        "source": envelope.get("_origin_source") or envelope.get("source"),
+        "source_meta": (
+            envelope.get("_origin_source_meta")
+            or envelope.get("source_meta", {})
+        ),
         "channel": envelope.get("_transcript_channel") or "pipeline",
         "parent_id": envelope["id"],
     }

@@ -63,7 +63,11 @@ def deliver(
         ))
 
     # Web/app clients have no outbound sink of their own; they listen on SSE/WS.
-    if source in ("web", "app"):
+    # Webhooks are in the same boat: unlike Telegram, whose bot notifies the
+    # user over its own transport, a webhook reply only ever becomes visible
+    # in the app — so it has to be pushed live too. Deliberately not widened
+    # beyond that; the other sources carry their own return path.
+    if source in ("web", "app") or source.startswith("webhook"):
         state.broadcast_reply({
             "type": event,
             "text": text,

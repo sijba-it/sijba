@@ -73,6 +73,7 @@ def deliver(
             "text": text,
             "parent_id": parent_id,
             "handler_id": handler_id,
+            "source": source,
             "source_meta": source_meta,
             "channel": channel,
         })

@@ -46,6 +46,37 @@ this, need to look at:
 
 ## Status
 
-Not started. Needs a `sijba-web`-focused pass before a concrete plan can
-be written — this file only captures the goal and what's already confirmed
-possible on the Core side.
+Done (2026-08-28). Shipped as a **per-webhook tile** in sijba-web rather than
+a free-text `/as` command — cleaner and it also covers the follow-up wish of
+seeing webhook traffic in its own Kachel.
+
+**Core (`sijba`):**
+- `core/web/api.py` — new `GET /api/webhooks` → `[{name, source}]`, never the
+  tokens. Built from the existing `_webhooks` module state.
+- `core/reply.py` — `deliver()` now puts `source` into the `broadcast_reply`
+  payload so a live reply can be attributed to its webhook.
+- `/api/message` already accepted `source` — no change; a
+  `test_message_source_is_passed_through` was added to pin it.
+- Tests: `tests/test_api.py` (webhooks endpoint lists without leaking tokens,
+  needs auth; message source passthrough; broadcast carries `source`).
+- `docs/api.md` updated.
+
+**App (`sijba-web`):**
+- `ChatMessage.source`; `ChannelItem.sendAsSource` / `sourceFilter` +
+  `historyKey` / `routesThroughPipeline` getters.
+- `SijbaApi.webhooks()`; transcript rows carry `source`.
+- `AppController` — one tile per webhook ("Webhook · voice"), a **filtered
+  view** of the pipeline transcript (`source == sourceFilter`); composer sends
+  `source = sendAsSource`; live reply events routed by `source`; unread badge
+  via `_markUnreadForSource`. Messages stay visible in the Pipeline tile too.
+- `home_shell.dart` — header title + `@`/`/` autocomplete keyed off
+  `routesThroughPipeline`.
+- Tests: `test/webhook_channel_test.dart`.
+
+**Deliberate side effect:** a message composed "as webhook:voice" really is
+routed like the live webhook — the Pushover outbound handler fires, so the
+phone gets a push too. That is the point (test routing/Pushover without the
+real trigger).
+
+Deploy: core-only + app; both via their normal Jenkins pipelines, no
+ConfigMap/ansible change.

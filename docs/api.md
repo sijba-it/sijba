@@ -19,6 +19,7 @@ All endpoints require `Authorization: Bearer <token>` when `auth_token` is set i
 |--------|------|-------------|
 | `GET` | `/api/version` | Build version + git commit (no auth) |
 | `GET` | `/api/handlers` | List all handlers with their states |
+| `GET` | `/api/webhooks` | Configured webhooks as `{name, source}` (never the tokens) |
 | `POST` | `/api/handlers/{id}/toggle` | Enable / disable a handler |
 | `POST` | `/api/register` | Register a remote HTTP handler / pipeline |
 | `POST` | `/api/register/{id}/heartbeat` | Refresh TTL for a registered handler |
@@ -71,7 +72,7 @@ Optional body fields:
 |-------|-------------|
 | `target` | Handler id or category — run only that part (skips match / full pipeline). Omit for the general inbound pipeline (router, LLM, …). |
 | `chat_id` | Stored in `source_meta` for the context store |
-| `source` | Defaults to `web` |
+| `source` | Defaults to `web`. Set e.g. `webhook:voice` to have the message routed and answered exactly like a real `POST /webhook/<token>` call — the app uses this for its per-webhook composer. |
 
 ```bash
 # Direct to one handler (no trigger prefix required)

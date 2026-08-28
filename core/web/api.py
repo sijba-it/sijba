@@ -196,6 +196,22 @@ async def list_plugin_channels():
     return registry.list_plugin_channels()
 
 
+@app.get("/api/webhooks", dependencies=[Depends(_check_auth)])
+async def list_webhooks():
+    """Configured webhooks as {name, source} — never the tokens.
+
+    Lets the app offer a "send as this webhook" affordance (a message tagged
+    with the webhook's source, routed like a real POST /webhook/<token> call).
+    """
+    result = [
+        {"name": name, "source": f"webhook:{name}"}
+        for name in sorted(set(_webhooks.values()))
+    ]
+    if _webhook_token:
+        result.append({"name": "webhook", "source": "webhook"})
+    return result
+
+
 async def _handle_plugin_reply(msg: dict) -> None:
     """Route a {"type": "reply"} message from a plugin WebSocket back to
     whoever sent the original message — the same delivery the pipeline does

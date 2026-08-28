@@ -148,7 +148,6 @@ def _defer(table: str, mid: str, reason: str) -> None:
     Silence is the one outcome that must not happen here: before this, a
     message nobody delivered was marked `done` exactly like one that had
     been."""
-    surface_failure = False
     with db.write() as conn:
         row = conn.execute(
             f"SELECT attempts, created_at FROM {table} WHERE id = ?", (mid,)

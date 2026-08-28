@@ -19,7 +19,6 @@ def client(tmp_path, db):
         auth_token="tok",
         webhook_token="hook",
         config_dir=tmp_path,
-        reload_fn=lambda: None,
         upload_dir=uploads,
     )
     with TestClient(api.app) as c:
@@ -37,7 +36,7 @@ async def aclient(tmp_path, db):
     uploads.mkdir()
     api.configure(
         auth_token="tok", webhook_token="hook", config_dir=tmp_path,
-        reload_fn=lambda: None, upload_dir=uploads,
+        upload_dir=uploads,
     )
     transport = httpx.ASGITransport(app=api.app)
     async with httpx.AsyncClient(
@@ -54,7 +53,7 @@ def noauth_client(tmp_path, db):
     uploads.mkdir()
     api.configure(
         auth_token=None, webhook_token=None, config_dir=tmp_path,
-        reload_fn=lambda: None, upload_dir=uploads,
+        upload_dir=uploads,
     )
     with TestClient(api.app) as c:
         yield c
@@ -411,7 +410,7 @@ def multi_client(tmp_path, db):
     uploads.mkdir()
     api.configure(
         auth_token="tok", webhook_token="legacy", config_dir=tmp_path,
-        reload_fn=lambda: None, upload_dir=uploads,
+        upload_dir=uploads,
         webhooks={"tok-voice": "voice", "tok-iot": "iot"},
     )
     with TestClient(api.app) as c:
@@ -457,7 +456,7 @@ def test_webhook_source_is_namespaced_away_from_trusted_sources(tmp_path, db):
     uploads.mkdir()
     api.configure(
         auth_token="tok", webhook_token=None, config_dir=tmp_path,
-        reload_fn=lambda: None, upload_dir=uploads,
+        upload_dir=uploads,
         webhooks={"t": "web"},
     )
     with TestClient(api.app) as c:

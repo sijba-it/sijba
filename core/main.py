@@ -2,7 +2,6 @@
 from __future__ import annotations
 import asyncio
 import shutil
-import signal
 import time
 from pathlib import Path
 
@@ -37,15 +36,6 @@ async def _source_callback(raw: dict) -> None:
         source_meta=raw.get("source_meta", {}),
         metadata=raw.get("metadata", {}),
     ))
-
-
-# ------------------------------------------------------------------
-# Hot-reload
-# ------------------------------------------------------------------
-
-def _do_reload(cfg: dict) -> None:
-    _logger.info("Hot-reload triggered")
-    handler_loader.reload(cfg["config_dir"])
 
 
 # ------------------------------------------------------------------
@@ -109,7 +99,6 @@ async def main() -> None:
         auth_token=cfg.get("auth_token"),
         webhook_token=cfg.get("webhook_token"),
         config_dir=config_dir,
-        reload_fn=lambda: _do_reload(cfg),
         upload_dir=upload_dir,
         webhooks=cfg.get("webhooks"),
     )
@@ -118,10 +107,6 @@ async def main() -> None:
 
     # Start persistent handlers (including sources)
     await lifecycle.start_all(state.handlers, config_dir, _source_callback)
-
-    # SIGHUP → hot reload
-    loop = asyncio.get_event_loop()
-    loop.add_signal_handler(signal.SIGHUP, lambda: _do_reload(cfg))
 
     # Queue workers
     asyncio.create_task(queue.run_inbound_worker(pipeline.process_inbound))

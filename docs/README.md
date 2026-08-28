@@ -44,4 +44,4 @@ python -m core.main        # uses SIJBA_CONFIG_DIR env var (default: ./sijba-con
 | Configure a new plugin | [plugins.md](plugins.md) |
 | Enable natural-language routing | [routing.md → Router plugin pattern](routing.md#router-plugin-pattern) |
 | Reset a conversation | [api.md → Context store](api.md#context-store) |
-| Hot-reload handlers without restart | [api.md → Handlers](api.md#handlers) |
+| Apply handler config changes | Restart the pod (see [handlers.md → Applying changes](handlers.md#applying-changes)) |

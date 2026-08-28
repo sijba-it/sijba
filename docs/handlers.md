@@ -26,6 +26,21 @@ handlers/
   99.0-echo.json         → priority 99.0  (runs last)
 ```
 
+Changes to files in `handlers/` take effect on the next Core restart (pod rollout or process restart). There is no hot-reload.
+
+---
+
+## Applying changes
+
+Edit or add handler JSON under `handlers/`, then restart Core so the files are re-read at boot:
+
+```bash
+kubectl rollout restart statefulset/sijba   # k8s
+# or restart the local process
+```
+
+This applies to `core.yaml` as well (port, auth tokens, webhooks, etc.) — every config change requires a restart.
+
 ---
 
 ## Full schema

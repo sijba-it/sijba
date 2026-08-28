@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Router plugin for SJBA.
+"""LLM router plugin for SIJBA.
 
-A lightweight LLM-based intent router. Placed at the end of the inbound pipeline
-(high priority number), it receives messages that no other handler has claimed and
-decides what to do:
+A lightweight LLM-based intent router. Placed near the end of the inbound pipeline
+(high priority number), it receives messages that no earlier handler has claimed
+and decides what to do:
 
   1. Route to a specific handler by injecting the canonical trigger command.
   2. Answer directly as a plain LLM response.
@@ -32,7 +32,7 @@ Handler config example
   "direction": "inbound",
   "lifecycle": "per_message",
   "type": "exec_json",
-  "exec": "{sijba_plugins}/router/main.py",
+  "exec": "{sijba_plugins}/llm-router/main.py",
   "receive_handler_context": true,
   "continue_on_match": false,
   "timeout_seconds": 30,
@@ -201,7 +201,7 @@ def main() -> None:
 
     if reply.upper() == "NONE" or not is_trigger:
         # Could not route — pass through to next handler (e.g. LLM)
-        print(f"[router] no route found, continuing", file=sys.stderr, flush=True)
+        print("[router] no route found, continuing", file=sys.stderr, flush=True)
         print(json.dumps({"continue": True}))
     else:
         print(f"[router] routing via: {reply!r}", file=sys.stderr, flush=True)

@@ -147,14 +147,22 @@ Requires `"allow_direct_inject": true` on the target handler.
 
 ## Router plugin pattern
 
-The router plugin (`router/main.py`) sits between trigger-word handlers and the general LLM:
+The LLM router plugin (`llm-router/main.py`) sits between trigger-word handlers and the general LLM:
 
 ```
-priority 0    audit     (always runs, logs)
-priority 20   iobroker  (matches "iobroker ...")
-priority 40   router    (LLM fallback — catches natural language commands)
-priority 50   llm       (general conversation catch-all)
+priority 0    audit         (always runs, logs)
+priority 20   iobroker      (matches "iobroker ...")
+priority 40   router-llm    (LLM fallback — catches natural language commands)
+priority 50   llm           (general conversation catch-all)
 ```
+
+For a deterministic first pass, put a [`regex-router`](../plugins-builtin/regex-router/README.md)
+handler *before* the LLM router: it matches spoken keyword prefixes
+("Einkauf ...", "Aufgabe ...") against a config-driven regex table and re-injects
+a `@channel` message for free, with no LLM call. With `ON_MATCH_CONTINUE` it can
+also run as a *tee* at the very top of the chain — mirroring every message to a
+channel (e.g. a raw voice-note log) while letting the pipeline carry on to the
+real routing.
 
 Flow:
 1. Receives messages no earlier handler matched
@@ -166,7 +174,7 @@ Flow:
 ```
 user: "mach die blasen an"
   → iobroker (no match — no "iobroker" prefix)
-  → router: injects "iobroker set Bubble true"
+  → llm-router: injects "iobroker set Bubble true"
   → iobroker: matches, executes
   → responds: "Bubble set to on"
 ```
@@ -176,7 +184,7 @@ back through the trigger match:
 
 ```
 user: "fix the failing test in project A"
-  → router: injects "@projekt-a fix the failing test"
+  → llm-router: injects "@projekt-a fix the failing test"
   → trigger match: @projekt-a → Cursor plugin takes over
 ```
 
@@ -192,9 +200,9 @@ priority and only the one matching the message's source runs. That gives you
 per-source routing behaviour without a second pipeline:
 
 ```
-90.0-router-voice.json     match: { "source": ["webhook:voice"] }
-90.0-router-telegram.json  match: { "source": ["telegram"] }
-90.0-router-web.json       match: { "source": ["web", "app"] }
+90.0-router-llm-voice.json     match: { "source": ["webhook:voice"] }
+90.0-router-llm-telegram.json  match: { "source": ["telegram"] }
+90.0-router-llm-web.json       match: { "source": ["web", "app"] }
 ```
 
 Give each one its own behaviour with `ROUTER_RULES` in its `env` block — it is
@@ -202,8 +210,10 @@ appended to the routing prompt:
 
 ```json
 {
-  "id": "router-voice",
+  "id": "router-llm-voice",
   "priority": 90.0,
+  "type": "exec_json",
+  "exec": "{sijba_plugins}/llm-router/main.py",
   "match": { "source": ["webhook:voice"] },
   "receive_handler_context": true,
   "continue_on_match": false,
@@ -232,4 +242,4 @@ The router pattern scales to multi-agent setups:
 
 The inject mechanism is the only primitive needed — no framework required.
 
-See [plugins.md → router/main.py](plugins.md#routermainpy) for configuration details.
+See [plugins.md → llm-router/main.py](plugins.md#llm-routermainpy) for configuration details.

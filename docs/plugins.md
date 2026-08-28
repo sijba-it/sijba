@@ -9,7 +9,8 @@ Located in `plugins-builtin/`. Reference with `{sijba_plugins}/...` in handler c
 - [telegram.py](#telegrampy)
 - [llm/main.py](#llmmainpy)
 - [iobroker/main.py](#iobrokermainpy)
-- [router/main.py](#routermainpy)
+- [regex-router/main.py](#regex-routermainpy)
+- [llm-router/main.py](#llm-routermainpy)
 
 ---
 
@@ -141,7 +142,36 @@ semantics (e.g. Intex SPA where every write triggers a toggle regardless of valu
 
 ---
 
-## router/main.py
+## regex-router/main.py
+
+Deterministic, zero-LLM router. Matches the message text against an ordered list
+of regex routes (first match wins) and re-injects a rewritten message — normally
+prefixed with a `@channel` mention or a trigger command. No match → `continue`.
+
+Routes come from `ROUTES` (JSON array) or `ROUTES_FILE` (path to the same JSON —
+preferred for k8s, keeps the escaped JSON out of the ConfigMap).
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `ROUTES` | `[]` | JSON array of `{"pattern": ..., "inject": ...}`. Ignored if `ROUTES_FILE` is set. |
+| `ROUTES_FILE` | — | File containing the JSON array. |
+| `ROUTES_FLAGS` | `i` | Comma-separated regex flags: `i`, `m`, `s`, `x`. |
+
+`pattern` is `re.match` (start-anchored). `inject` is a `str.format` template with
+`{rest}` (text minus the matched prefix), `{text}` (full original), and `{0}`…`{n}`
+(capture groups).
+
+```json
+{ "pattern": "^(einkauf|besorgen)\\b[:,]?\\s*", "inject": "@obsidian [einkauf] {rest}" }
+```
+
+Use it in front of `llm-router` for the deliberate spoken keywords, and again at the
+end of the chain with a single `".*"` route as the default target. See
+[regex-router/README.md](../plugins-builtin/regex-router/README.md).
+
+---
+
+## llm-router/main.py
 
 LLM-based fallback router. Place between trigger-word handlers and the general LLM
 (e.g. priority 40.0) to catch natural-language commands that no trigger matched.
@@ -164,7 +194,7 @@ Requires `receive_handler_context: true` in the handler config.
 ```
 user: "mach die blasen an"
   → iobroker handler: no match (no "iobroker" prefix)
-  → router: LLM sees iobroker hint → injects "iobroker set Bubble true"
+  → llm-router: LLM sees iobroker hint → injects "iobroker set Bubble true"
   → iobroker handler: matches, executes
   → responds: "Bubble set to on"
 ```

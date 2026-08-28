@@ -93,7 +93,6 @@
   <div class="panel" id="handler-panel">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
       <h2 style="margin:0;">Handlers</h2>
-      <button class="toggle-btn" onclick="reloadHandlers()" title="Hot-reload handlers/ directory">↺ reload</button>
     </div>
     <div id="handler-list">loading…</div>
   </div>
@@ -196,11 +195,6 @@ async function toggleHandler(id) {
   if (r.ok) {
     await loadHandlers();
   }
-}
-
-async function reloadHandlers() {
-  await fetch('/api/handlers/reload', { method: 'POST', headers: headers() });
-  await loadHandlers();
 }
 
 async function loadQueue() {

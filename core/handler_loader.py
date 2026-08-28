@@ -8,7 +8,6 @@ from typing import Any, Dict, List
 import jsonschema
 
 import core.log as log
-import core.state as state
 
 _logger = log.get("handler_loader")
 _SCHEMA_PATH = Path(__file__).parent.parent / "schema" / "handler.schema.json"
@@ -78,35 +77,3 @@ def load(config_dir: Path) -> List[Dict[str, Any]]:
 
     loaded.sort(key=lambda h: h["priority"])
     return loaded
-
-
-def reload(config_dir: Path) -> None:
-    """Hot-reload file handlers, then re-merge dynamic registrations.
-
-    Per-message handlers take effect immediately; persistent handlers are NOT restarted.
-    """
-    import core.registry as registry
-
-    new_handlers = load(config_dir)
-    state.file_handlers = new_handlers
-
-    # Initialise state for new file handlers; preserve state for existing ones
-    new_ids = {h["id"] for h in new_handlers} | set(state.registered_handlers.keys())
-    for h in new_handlers:
-        hid = h["id"]
-        if hid not in state.handler_states:
-            if h["lifecycle"] == "persistent":
-                state.handler_states[hid] = "pending"
-            else:
-                state.handler_states[hid] = "healthy"
-
-    # Remove stale states for handlers that were removed (keep registered remotes)
-    for hid in list(state.handler_states.keys()):
-        if hid not in new_ids:
-            del state.handler_states[hid]
-
-    registry.rebuild()
-    _logger.info(
-        f"Reloaded {len(new_handlers)} file handlers "
-        f"+ {len(state.registered_handlers)} registered"
-    )

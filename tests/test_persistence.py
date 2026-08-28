@@ -279,34 +279,3 @@ def test_loader_skips_schema_violations(tmp_path):
 
 def test_loader_missing_dir_is_not_fatal(tmp_path):
     assert handler_loader.load(tmp_path) == []
-
-
-def test_reload_preserves_state_of_surviving_handlers(tmp_path):
-    write_handler(tmp_path, "10.0-a.json", {
-        "id": "a", "direction": "inbound", "type": "exec_json", "exec": "/bin/true",
-    })
-    write_handler(tmp_path, "20.0-b.json", {
-        "id": "b", "direction": "inbound", "type": "exec_json", "exec": "/bin/true",
-    })
-    state.file_handlers = handler_loader.load(tmp_path)
-    state.handler_states = {"a": "stopped", "b": "healthy"}
-
-    (tmp_path / "handlers" / "20.0-b.json").unlink()
-    handler_loader.reload(tmp_path)
-
-    assert state.handler_states["a"] == "stopped", "user's disable must survive reload"
-    assert "b" not in state.handler_states, "removed handler must drop its state"
-    assert [h["id"] for h in state.handlers] == ["a"]
-
-
-def test_reload_keeps_registered_remotes(tmp_path):
-    import core.registry as registry
-
-    registry.register({"id": "pods", "url": "http://x"})
-    write_handler(tmp_path, "10.0-a.json", {
-        "id": "a", "direction": "inbound", "type": "exec_json", "exec": "/bin/true",
-    })
-
-    handler_loader.reload(tmp_path)
-
-    assert {h["id"] for h in state.handlers} == {"a", "pods"}

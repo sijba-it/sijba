@@ -184,7 +184,6 @@ curl -X DELETE http://localhost:8080/api/store/llm/123456789 -H "Authorization: 
 | `GET` | `/` | Web UI |
 | `GET` | `/api/handlers` | List handlers and their states |
 | `POST` | `/api/handlers/{id}/toggle` | Enable / disable a handler |
-| `POST` | `/api/handlers/reload` | Hot-reload handlers (no restart needed) |
 | `GET` | `/api/logs` | SSE live log stream |
 | `GET` | `/api/queue` | Queue status counts |
 | `POST` | `/api/message` | Inject a message (`target` optional → one handler; omit → full pipeline) |

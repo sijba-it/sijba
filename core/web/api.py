@@ -38,21 +38,19 @@ _auth_token: Optional[str] = None
 _webhook_token: Optional[str] = None
 _webhooks: dict = {}  # token -> name, from the `webhooks:` config block
 _config_dir: Optional[Path] = None
-_reload_fn = None  # injected by main.py
 _upload_dir: Optional[Path] = None
 
 # PVC is small (1Gi) and this is a single-user instance — keep uploads modest.
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
-def configure(auth_token: str, webhook_token: str, config_dir: Path, reload_fn,
+def configure(auth_token: str, webhook_token: str, config_dir: Path,
               upload_dir: Path, webhooks: dict = None) -> None:
-    global _auth_token, _webhook_token, _webhooks, _config_dir, _reload_fn, _upload_dir
+    global _auth_token, _webhook_token, _webhooks, _config_dir, _upload_dir
     _auth_token = auth_token
     _webhook_token = webhook_token
     _webhooks = webhooks or {}
     _config_dir = config_dir
-    _reload_fn = reload_fn
     _upload_dir = upload_dir
 
 
@@ -186,13 +184,6 @@ async def toggle_handler(handler_id: str):
         new_state = "stopped"
 
     return {"id": handler_id, "state": new_state}
-
-
-@app.post("/api/handlers/reload", dependencies=[Depends(_check_auth)])
-async def reload_handlers():
-    if _reload_fn:
-        _reload_fn()
-    return {"reloaded": len(state.handlers)}
 
 
 @app.get("/api/queue", dependencies=[Depends(_check_auth)])

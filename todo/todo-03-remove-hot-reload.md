@@ -49,15 +49,9 @@ outbound delivery load-bearing rather than a nice-to-have.
 
 ## Check before removing
 
-- Does **sijba-web**'s UI have a "reload" button or similar that calls
-  `POST /api/handlers/reload`? Haven't checked the Flutter code for this
-  yet. If it exists, removing the endpoint leaves a dead button — either
-  remove the button too (different repo, Dart) or have the endpoint 404
-  gracefully with a clear message pointing at a restart instead.
+- **sijba-web**: no `POST /api/handlers/reload` call — nothing to change there.
+- **core/web/ui.html**: had a ↺ reload button — removed with the endpoint.
 
 ## Status
 
-Not started. Blocked on / sequenced after todo-02 by design choice above,
-not a hard technical dependency — could be done standalone if todo-02 is
-deprioritized, just accept that restarts stay lossy for outbound delivery
-in the interim.
+Done (2026-08-28).

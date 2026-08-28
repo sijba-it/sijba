@@ -121,6 +121,16 @@ def test_message_defaults_source_and_chat_id(client):
     assert env["source_meta"]["chat_id"] == "web"
 
 
+def test_message_source_is_passed_through(client):
+    """todo-04: the app can send a message tagged as a given webhook so it
+    routes exactly like a real POST /webhook/<token> call."""
+    client.post("/api/message", json={"text": "licht an", "source": "webhook:voice"})
+
+    env = _first_queued()
+    assert env["source"] == "webhook:voice"
+    assert env["source_meta"]["chat_id"] == "web"
+
+
 def test_message_target_is_passed_through(client):
     r = client.post("/api/message", json={"text": "hallo", "target": "projekt-a"})
 
@@ -317,6 +327,8 @@ async def test_plugin_reply_from_a_webhook_source_is_broadcast(db, replies):
 
     events = replies.drain()
     assert [e["text"] for e in events] == ["fertig"]
+    # The app filters its per-webhook view by this field.
+    assert events[0]["source"] == "webhook:voice"
 
 
 # ------------------------------------------------------------------
@@ -438,6 +450,24 @@ def test_legacy_single_token_still_works(multi_client):
 
 def test_unknown_token_is_rejected(multi_client):
     assert multi_client.post("/webhook/nope", json={"text": "x"}).status_code == 403
+
+
+def test_webhooks_endpoint_lists_configured_webhooks(multi_client):
+    auth = {"Authorization": "Bearer tok"}
+    res = multi_client.get("/api/webhooks", headers=auth)
+    body = res.json()
+
+    assert {"name": "iot", "source": "webhook:iot"} in body
+    assert {"name": "voice", "source": "webhook:voice"} in body
+    # legacy single token is offered too
+    assert {"name": "webhook", "source": "webhook"} in body
+    # never leak the tokens
+    assert "tok-voice" not in res.text
+    assert "legacy" not in res.text
+
+
+def test_webhooks_endpoint_needs_auth(multi_client):
+    assert multi_client.get("/api/webhooks").status_code == 401
 
 
 def test_source_cannot_be_set_from_the_body(multi_client):

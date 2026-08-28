@@ -156,17 +156,18 @@ preferred for k8s, keeps the escaped JSON out of the ConfigMap).
 | `ROUTES` | `[]` | JSON array of `{"pattern": ..., "inject": ...}`. Ignored if `ROUTES_FILE` is set. |
 | `ROUTES_FILE` | — | File containing the JSON array. |
 | `ROUTES_FLAGS` | `i` | Comma-separated regex flags: `i`, `m`, `s`, `x`. |
+| `ON_MATCH_CONTINUE` | — | Truthy → a match emits `continue: true` (tee mode): mirror the message and keep going. |
 
-`pattern` is `re.match` (start-anchored). `inject` is a `str.format` template with
-`{rest}` (text minus the matched prefix), `{text}` (full original), and `{0}`…`{n}`
-(capture groups).
+`pattern` is `re.match` (start-anchored). `inject` is a **Jinja2** template with
+`{{ rest }}` (text minus the matched prefix), `{{ text }}` (full original), and
+`{{ groups[0] }}` (capture groups). Filters/conditionals work.
 
 ```json
-{ "pattern": "^(einkauf|besorgen)\\b[:,]?\\s*", "inject": "@obsidian [einkauf] {rest}" }
+{ "pattern": "^(einkauf|besorgen)\\b[:,]?\\s*", "inject": "@obsidian [einkauf] {{ rest }}" }
 ```
 
-Use it in front of `llm-router` for the deliberate spoken keywords, and again at the
-end of the chain with a single `".*"` route as the default target. See
+Use it in front of `llm-router` for the deliberate spoken keywords, or as a tee at
+the top of the chain (`ON_MATCH_CONTINUE`) to mirror every message somewhere. See
 [regex-router/README.md](../plugins-builtin/regex-router/README.md).
 
 ---

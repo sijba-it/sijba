@@ -29,15 +29,20 @@ No match → `continue` → the message falls through to the next handler.
 ```json
 {
   "pattern": "^(einkauf|einkaufs?liste|besorgen)\\b[:,]?\\s*",
-  "inject":  "@obsidian [einkauf] {rest}"
+  "inject":  "@obsidian [einkauf] {{ rest }}"
 }
 ```
 
 - `pattern` — matched with `re.match` (anchored at the start of the text).
-- `inject` — `str.format` template. Available fields:
-  - `{rest}` — text with the matched prefix removed, stripped
-  - `{text}` — the full original text, unchanged
-  - `{0}`…`{n}` — positional regex capture groups
+- `inject` — a **Jinja2** template. Variables:
+  - `{{ rest }}` — text with the matched prefix removed, stripped
+  - `{{ text }}` — the full original text, unchanged
+  - `{{ groups[0] }}` — positional regex capture groups (0 = first group)
+
+  Filters and conditionals work, e.g.
+  `"@obsidian [{{ 'task' if 'muss' in text|lower else 'journal' }}] {{ rest | lower }}"`.
+  Templates come from trusted config, so autoescaping is off. A syntax error
+  or undefined variable is logged and the message passes through (`continue`).
 
 ## Tee example (mirror every message, keep going)
 
@@ -52,7 +57,7 @@ No match → `continue` → the message falls through to the next handler.
   "match": { "source": ["webhook:voice"] },
   "continue_on_match": true,
   "env": {
-    "ROUTES": "[{\"pattern\":\".*\",\"inject\":\"@obsidian [voice] {text}\"}]",
+    "ROUTES": "[{\"pattern\":\".*\",\"inject\":\"@obsidian [voice] {{ text }}\"}]",
     "ON_MATCH_CONTINUE": "true"
   }
 }

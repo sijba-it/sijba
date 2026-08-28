@@ -15,22 +15,35 @@ exec so the test stays offline.
 from __future__ import annotations
 
 import json
+import sys
 import textwrap
 
 import pytest
 
 import core.pipeline as pipeline
+import core.plugin_runner as plugin_runner
 from conftest import handler, install, register_channel
+
+# Run the builtin plugins with the same interpreter as the test run, so the
+# subprocess sees the same installed deps (jinja2). In the prod image the
+# shebang (`/usr/bin/env python3`) already resolves to the deps-carrying
+# interpreter; this is only to make local runs independent of PATH.
+REGEX_ROUTER = str(plugin_runner.BUILTIN_DIR / "regex-router" / "main.py")
+
+
+def regex_router_handler(hid, priority, env, **overrides):
+    return handler(hid, priority=priority, exec=sys.executable,
+                   args=[REGEX_ROUTER], env=env, **overrides)
 
 ROUTES_VOICE = [
     {"pattern": r"^(einkauf|einkaufsliste|einkaufszettel|einkaufen|besorgen|kaufen)\b\s*[:,-]?\s*",
-     "inject": "@obsidian [einkauf] {rest}"},
+     "inject": "@obsidian [einkauf] {{ rest }}"},
     {"pattern": r"^(aufgabe|task|todo|to-do)\b\s*[:,-]?\s*",
-     "inject": "@obsidian [task] {rest}"},
+     "inject": "@obsidian [task] {{ rest }}"},
     {"pattern": r"^(termin|kalender)\b\s*[:,-]?\s*",
-     "inject": "@obsidian [termin] {rest}"},
+     "inject": "@obsidian [termin] {{ rest }}"},
     {"pattern": r"^(recherche|recherchiere|recherchier)\b\s*[:,-]?\s*",
-     "inject": "@Recherche {rest}"},
+     "inject": "@Recherche {{ rest }}"},
 ]
 
 
@@ -76,20 +89,17 @@ def voice_chain(tmp_path, wired):
     fake_llm.chmod(0o755)
 
     install(
-        handler(
-            "voice-tee", priority=10.0, match={"source": ["webhook:voice"]},
-            continue_on_match=True,
-            exec="{sijba_plugins}/regex-router/main.py",
-            env={
-                "ROUTES": json.dumps([{"pattern": ".*", "inject": "@obsidian [voice] {text}"}]),
+        regex_router_handler(
+            "voice-tee", 10.0,
+            {
+                "ROUTES": json.dumps([{"pattern": ".*", "inject": "@obsidian [voice] {{ text }}"}]),
                 "ON_MATCH_CONTINUE": "true",
             },
+            match={"source": ["webhook:voice"]}, continue_on_match=True,
         ),
-        handler(
-            "router-regex", priority=70.0, match={"source": ["webhook:voice"]},
-            continue_on_match=False,
-            exec="{sijba_plugins}/regex-router/main.py",
-            env={"ROUTES_FILE": str(routes_file)},
+        regex_router_handler(
+            "router-regex", 70.0, {"ROUTES_FILE": str(routes_file)},
+            match={"source": ["webhook:voice"]}, continue_on_match=False,
         ),
         handler(
             "router-llm", priority=90.0, match={"source": ["webhook:voice"]},
@@ -186,6 +196,31 @@ async def test_recherche_keyword_routes_to_its_own_channel(voice_chain, wired, d
     ]
     assert [m["payload"]["text"] for m in recherche.messages_for("Recherche")] == [
         "@Recherche was kostet ein Tesla Model 3"
+    ]
+
+
+async def test_jinja_filters_and_conditionals_in_inject(voice_chain, wired, db):
+    """inject templates are Jinja2, not str.format."""
+    import core.state as state
+
+    for h in state.file_handlers:
+        if h["id"] == "router-regex":
+            h["env"]["ROUTES"] = json.dumps([
+                {"pattern": r"^merk dir\s+",
+                 "inject": "@obsidian [{{ 'task' if 'muss' in text|lower else 'idea' }}] {{ rest | lower }}"},
+            ])
+            h["env"].pop("ROUTES_FILE", None)
+
+    inbound, _ = wired
+    obsidian = register_channel("cursor-obs", "obsidian", triggers=["@obsidian"])
+
+    await pipeline.process_inbound(voice_env("merk dir ich MUSS Öl kaufen"))
+    await _drain_inbound(inbound)
+
+    texts = sorted(m["payload"]["text"] for m in obsidian.messages_for("obsidian"))
+    assert texts == [
+        "@obsidian [task] ich muss öl kaufen",
+        "@obsidian [voice] merk dir ich MUSS Öl kaufen",
     ]
 
 

@@ -41,11 +41,19 @@ Route object
 }
 
 `pattern` is matched with re.match (anchored at the start). `inject` is a
-str.format template with these fields available:
+Jinja2 template with these variables available:
 
-  {rest}    the text with the matched prefix removed, stripped
-  {text}    the full original text, unchanged
-  {0}..{n}  positional regex capture groups
+  {{ rest }}       the text with the matched prefix removed, stripped
+  {{ text }}       the full original text, unchanged
+  {{ groups[0] }}  positional regex capture groups (0 = first group)
+
+Filters and conditionals work, e.g.
+  "@obsidian [einkauf] {{ rest | lower }}"
+  "@obsidian [{{ 'task' if 'muss' in text else 'journal' }}] {{ text }}"
+
+Templates come from trusted config, so autoescaping is off. An undefined
+variable or a syntax error is logged and the message is passed through
+(continue) rather than injecting a broken command.
 
 Handler config example
 ----------------------
@@ -69,8 +77,11 @@ import os
 import re
 import sys
 
+import jinja2
+
 _FLAG_MAP = {"i": re.I, "m": re.M, "s": re.S, "x": re.X}
 _TRUTHY = {"1", "true", "yes", "on"}
+_JINJA = jinja2.Environment(undefined=jinja2.StrictUndefined, autoescape=False)
 
 
 def _emit(obj: dict) -> None:
@@ -139,8 +150,10 @@ def main() -> None:
 
         rest = text[match.end():].strip()
         try:
-            new_text = template.format(*match.groups(), rest=rest, text=text)
-        except (IndexError, KeyError) as exc:
+            new_text = _JINJA.from_string(template).render(
+                rest=rest, text=text, groups=list(match.groups()),
+            ).strip()
+        except jinja2.TemplateError as exc:
             print(f"[regex-router] bad inject template {template!r}: {exc}",
                   file=sys.stderr, flush=True)
             _emit({"continue": True})

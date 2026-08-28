@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 
+import core.db as database
 import core.handler_loader as handler_loader
 import core.msg_queue as queue
-import core.state as state
 import core.store as store
 import core.transcript as transcript
 
@@ -66,6 +66,71 @@ async def test_worker_marks_failed_and_keeps_running(db):
 
     assert seen == ["ok"], "one bad message must not stall the queue"
     assert queue.depths()["inbound"] == {"failed": 1, "done": 1}
+
+
+async def test_worker_retries_a_message_nobody_delivered(db, monkeypatch):
+    """Retry is the whole point: an undelivered message stays in the queue
+    instead of being marked done like a delivered one."""
+    monkeypatch.setattr(queue, "BACKOFF_SECONDS", (0,))
+    queue.enqueue_outbound({"id": "a", "text": "hi"})
+    tries = []
+
+    async def fn(env):
+        tries.append(env["id"])
+        if len(tries) < 3:
+            raise queue.Retry("no outbound handler took it")
+
+    task = asyncio.create_task(queue.run_outbound_worker(fn))
+    await asyncio.sleep(0.25)
+    task.cancel()
+
+    assert len(tries) == 3
+    assert queue.depths()["outbound"] == {"done": 1}
+
+
+async def test_worker_gives_up_loudly_instead_of_retrying_forever(db, monkeypatch):
+    monkeypatch.setattr(queue, "BACKOFF_SECONDS", (0,))
+    queue.enqueue_outbound({"id": "a", "text": "hi"})
+    tries = []
+
+    async def fn(env):
+        tries.append(env["id"])
+        raise queue.Retry("nobody home")
+
+    task = asyncio.create_task(queue.run_outbound_worker(fn))
+    await asyncio.sleep(0.4)
+    task.cancel()
+
+    assert len(tries) == queue.MAX_ATTEMPTS
+    assert queue.depths()["outbound"] == {"failed": 1}
+    attempts, last_error = database.query_one(
+        "SELECT attempts, last_error FROM outbound_queue WHERE id = 'a'"
+    )
+    assert attempts == queue.MAX_ATTEMPTS
+    assert "nobody home" in last_error
+
+
+def test_retry_waits_for_its_backoff(db):
+    queue.enqueue_outbound({"id": "a", "text": "hi"})
+    queue._claim_next(queue.OUTBOUND)
+
+    queue._defer(queue.OUTBOUND, "a", "nobody home")
+
+    assert queue.depths()["outbound"] == {"pending": 1}
+    assert queue._claim_next(queue.OUTBOUND) is None, "re-claimed before its backoff"
+
+
+def test_recover_claimed_requeues_messages_orphaned_by_a_restart(db):
+    queue.enqueue_inbound({"id": "a", "text": "hi"})
+    queue.enqueue_outbound({"id": "b", "text": "ho"})
+    queue._claim_next(queue.INBOUND)
+    queue._claim_next(queue.OUTBOUND)
+    assert queue.depths() == {"inbound": {"claimed": 1}, "outbound": {"claimed": 1}}
+
+    assert queue.recover_claimed() == 2
+
+    assert queue.depths() == {"inbound": {"pending": 1}, "outbound": {"pending": 1}}
+    assert queue._claim_next(queue.INBOUND)[0] == "a", "must be processable again"
 
 
 async def test_worker_preserves_envelope_fields(db):
@@ -220,6 +285,127 @@ def test_transcript_normalises_unknown_role(db):
     transcript.append(chat_id="web", channel="pipeline", role="hacker", text="hi")
 
     assert transcript.list_messages("web")[0]["role"] == "sys"
+
+
+def test_mark_delivery_failed_flags_bot_reply(db):
+    transcript.append(
+        chat_id="web",
+        channel="pipeline",
+        role="bot",
+        text="hi",
+        envelope_id="env-in",
+    )
+
+    ctx = transcript.mark_delivery_failed("env-in", "nobody home")
+
+    assert ctx == {"channel": "pipeline", "chat_id": "web"}
+    msg = transcript.list_messages("web")[0]
+    assert msg["delivery_status"] == "failed"
+    assert msg["delivery_error"] == "nobody home"
+
+
+def test_mark_delivery_failed_is_noop_without_a_bot_row(db):
+    assert transcript.mark_delivery_failed("missing", "x") is None
+
+
+async def test_outbound_give_up_marks_transcript_and_broadcasts(
+    db, monkeypatch, replies
+):
+    monkeypatch.setattr(queue, "MAX_ATTEMPTS", 1)
+    monkeypatch.setattr(queue, "BACKOFF_SECONDS", (0,))
+    transcript.append(
+        chat_id="web",
+        channel="pipeline",
+        role="bot",
+        text="answer",
+        envelope_id="env-in",
+    )
+    queue.enqueue_outbound({
+        "id": "out-1",
+        "parent_id": "env-in",
+        "source": "webhook:voice",
+        "source_meta": {"chat_id": "web"},
+        "text": "answer",
+        "pipeline_text": "answer",
+        "depth": 0,
+    })
+
+    async def fn(env):
+        raise queue.Retry("no outbound handler took [webhook:voice→source]")
+
+    task = asyncio.create_task(queue.run_outbound_worker(fn))
+    await asyncio.sleep(0.2)
+    task.cancel()
+
+    msg = transcript.list_messages("web")[0]
+    assert msg["delivery_status"] == "failed"
+    events = replies.drain()
+    assert any(
+        e.get("type") == "delivery_failed" and e.get("parent_id") == "env-in"
+        for e in events
+    )
+
+
+async def test_outbound_give_up_skips_self_delivering_sources(db, monkeypatch):
+    monkeypatch.setattr(queue, "MAX_ATTEMPTS", 1)
+    monkeypatch.setattr(queue, "BACKOFF_SECONDS", (0,))
+    transcript.append(
+        chat_id="web",
+        channel="pipeline",
+        role="bot",
+        text="answer",
+        envelope_id="env-web",
+    )
+    queue.enqueue_outbound({
+        "id": "out-web",
+        "parent_id": "env-web",
+        "source": "web",
+        "source_meta": {"chat_id": "web"},
+        "text": "answer",
+        "pipeline_text": "answer",
+        "depth": 0,
+    })
+
+    async def fn(env):
+        raise queue.Retry("no handler")
+
+    task = asyncio.create_task(queue.run_outbound_worker(fn))
+    await asyncio.sleep(0.2)
+    task.cancel()
+
+    assert transcript.list_messages("web")[0].get("delivery_status") is None
+
+
+async def test_successful_retry_does_not_mark_transcript(db, monkeypatch):
+    monkeypatch.setattr(queue, "BACKOFF_SECONDS", (0,))
+    transcript.append(
+        chat_id="web",
+        channel="pipeline",
+        role="bot",
+        text="answer",
+        envelope_id="env-in",
+    )
+    queue.enqueue_outbound({
+        "id": "out-1",
+        "parent_id": "env-in",
+        "source": "webhook:voice",
+        "source_meta": {"chat_id": "web"},
+        "text": "answer",
+        "pipeline_text": "answer",
+        "depth": 0,
+    })
+    tries = []
+
+    async def fn(env):
+        tries.append(1)
+        if len(tries) < 2:
+            raise queue.Retry("not yet")
+
+    task = asyncio.create_task(queue.run_outbound_worker(fn))
+    await asyncio.sleep(0.25)
+    task.cancel()
+
+    assert transcript.list_messages("web")[0].get("delivery_status") is None
 
 
 # ------------------------------------------------------------------

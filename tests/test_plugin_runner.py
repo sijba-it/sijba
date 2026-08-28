@@ -36,7 +36,8 @@ async def test_exec_json_invalid_output_continues_pipeline(tmp_path, db):
 
     resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
 
-    assert resp == {"continue": True}
+    assert resp["continue"] is True
+    assert resp["_error"], "a failed invoke must be distinguishable from a real response"
 
 
 async def test_exec_json_nonzero_exit_continues_pipeline(tmp_path, db):
@@ -44,7 +45,8 @@ async def test_exec_json_nonzero_exit_continues_pipeline(tmp_path, db):
 
     resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
 
-    assert resp == {"continue": True}
+    assert resp["continue"] is True
+    assert resp["_error"], "a failed invoke must be distinguishable from a real response"
 
 
 async def test_exec_json_timeout_continues_pipeline(tmp_path, db):
@@ -56,7 +58,8 @@ async def test_exec_json_timeout_continues_pipeline(tmp_path, db):
 
     resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
 
-    assert resp == {"continue": True}
+    assert resp["continue"] is True
+    assert resp["_error"], "a failed invoke must be distinguishable from a real response"
 
 
 async def test_missing_executable_continues_pipeline(tmp_path, db):
@@ -64,7 +67,8 @@ async def test_missing_executable_continues_pipeline(tmp_path, db):
 
     resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
 
-    assert resp == {"continue": True}
+    assert resp["continue"] is True
+    assert resp["_error"], "a failed invoke must be distinguishable from a real response"
 
 
 async def test_unknown_handler_type_continues_pipeline(tmp_path, db):
@@ -72,7 +76,8 @@ async def test_unknown_handler_type_continues_pipeline(tmp_path, db):
 
     resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
 
-    assert resp == {"continue": True}
+    assert resp["continue"] is True
+    assert resp["_error"], "a failed invoke must be distinguishable from a real response"
 
 
 async def test_env_block_is_expanded_from_the_host_environment(tmp_path, db, monkeypatch):
@@ -222,7 +227,8 @@ async def test_persistent_handler_without_instance_continues(tmp_path, db):
 
     resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
 
-    assert resp == {"continue": True}
+    assert resp["continue"] is True
+    assert resp["_error"], "a failed invoke must be distinguishable from a real response"
 
 
 # ------------------------------------------------------------------

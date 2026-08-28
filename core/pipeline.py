@@ -6,12 +6,13 @@ from pathlib import Path
 from typing import Optional
 
 import core.log as log
+import core.msg_queue as msg_queue
 import core.state as state
 import core.plugin_runner as plugin_runner
 import core.registry as registry
 import core.reply as reply
 import core.transcript as transcript
-from core.envelope import new_envelope
+from core.envelope import expects_outbound_delivery, new_envelope
 
 _logger = log.get("pipeline")
 
@@ -131,7 +132,11 @@ async def _run(
     handler_override: list = None,
     *,
     skip_match: bool = False,
-) -> None:
+) -> int:
+    """Run the matching handlers. Returns how many of them actually took the
+    message — which is how process_outbound tells "nobody delivered this"
+    apart from "delivered fine"."""
+    delivered = 0
     if handler_override is not None:
         handlers = handler_override
     elif direction == "outbound":
@@ -155,9 +160,17 @@ async def _run(
             asyncio.create_task(
                 plugin_runner.invoke(handler, envelope, _config_dir)
             )
+            delivered += 1  # handed off; there is no result to judge it by
             continue
 
         response = await plugin_runner.invoke(handler, envelope, _config_dir)
+
+        if response.get("_error"):
+            # invoke() never raises — a dead remote handler looks like an
+            # ordinary empty response unless we check for this.
+            _logger.warning(f"[{hid}] invoke failed: {response['_error']}")
+        else:
+            delivered += 1
 
         # pipeline_text update
         if "pipeline_text" in response:
@@ -215,6 +228,8 @@ async def _run(
         if not response.get("continue", default_continue):
             _logger.info(f"[{hid}] stopped pipeline")
             break
+
+    return delivered
 
 
 # ------------------------------------------------------------------
@@ -325,4 +340,14 @@ async def process_outbound(envelope: dict) -> None:
     src = envelope.get("source", "?")
     text = (envelope.get("pipeline_text") or "")[:80]
     _logger.info(f"outbound [{src}]: {text!r}")
-    await _run("outbound", envelope)
+    delivered = await _run("outbound", envelope)
+
+    if delivered or not expects_outbound_delivery(envelope):
+        return
+
+    # Nobody took it. Hand it back to the queue instead of letting the worker
+    # mark it done: the handler may just be restarting, or not have
+    # re-registered yet after a Core restart (registrations are restored from
+    # disk now, but a remote that moved still needs a heartbeat to come back).
+    target = envelope.get("_respond_target", "source")
+    raise msg_queue.Retry(f"no outbound handler took [{src}→{target}]")

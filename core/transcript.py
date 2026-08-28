@@ -36,6 +36,14 @@ def init() -> None:
             conn.execute("ALTER TABLE transcript ADD COLUMN attachments TEXT")
         except sqlite3.OperationalError:
             pass  # already migrated
+        for col, typedef in (
+            ("delivery_status", "TEXT"),
+            ("delivery_error", "TEXT"),
+        ):
+            try:
+                conn.execute(f"ALTER TABLE transcript ADD COLUMN {col} {typedef}")
+            except sqlite3.OperationalError:
+                pass  # already migrated
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_transcript_chat_ch"
             " ON transcript (chat_id, channel, id)"
@@ -103,6 +111,29 @@ def append(
         _prune(conn, str(chat_id), str(channel))
 
 
+def mark_delivery_failed(envelope_id: str, error: str) -> dict | None:
+    """Flag the bot reply tied to an inbound envelope as undelivered.
+
+    Returns {channel, chat_id} when a row was updated, else None."""
+    if not envelope_id:
+        return None
+    row = db.query_one(
+        "SELECT id, channel, chat_id FROM transcript"
+        " WHERE envelope_id = ? AND role = 'bot'"
+        " ORDER BY id DESC LIMIT 1",
+        (str(envelope_id),),
+    )
+    if not row:
+        return None
+    tid, channel, chat_id = row
+    db.execute(
+        "UPDATE transcript SET delivery_status = 'failed', delivery_error = ?"
+        " WHERE id = ?",
+        (error, tid),
+    )
+    return {"channel": channel, "chat_id": chat_id}
+
+
 def list_messages(
     chat_id: str,
     channel: str = "pipeline",
@@ -112,9 +143,11 @@ def list_messages(
     channel = channel or "pipeline"
     rows = db.query(
         """
-        SELECT ts, role, text, handler_id, envelope_id, source, attachments
+        SELECT ts, role, text, handler_id, envelope_id, source, attachments,
+               delivery_status, delivery_error
         FROM (
-          SELECT ts, role, text, handler_id, envelope_id, source, attachments, id
+          SELECT ts, role, text, handler_id, envelope_id, source, attachments,
+                 delivery_status, delivery_error, id
           FROM transcript
           WHERE chat_id=? AND channel=?
           ORDER BY id DESC
@@ -133,6 +166,8 @@ def list_messages(
             "envelope_id": r[4],
             "source": r[5],
             "attachments": json.loads(r[6]) if r[6] else None,
+            "delivery_status": r[7],
+            "delivery_error": r[8],
         }
         for r in rows
     ]

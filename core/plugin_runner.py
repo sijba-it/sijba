@@ -76,7 +76,7 @@ async def invoke(handler: Dict[str, Any], envelope: dict, config_dir: Path) -> d
         ph = state.persistent.get(handler["id"])
         if ph is None:
             _logger.error(f"No persistent instance for handler '{handler['id']}'")
-            return {"continue": True}
+            return {"continue": True, "_error": "no persistent instance"}
         response = await ph.invoke(envelope)
     else:
         response = await _invoke_per_message(handler, envelope, config_dir)
@@ -96,7 +96,7 @@ async def _invoke_per_message(handler: Dict[str, Any], envelope: dict, config_di
     if htype == "http":
         return await _http_once(handler, envelope)
     _logger.error(f"Unknown handler type '{htype}'")
-    return {"continue": True}
+    return {"continue": True, "_error": f"unknown handler type '{htype}'"}
 
 
 async def _exec_json(handler: dict, envelope: dict, config_dir: Path) -> dict:
@@ -123,10 +123,10 @@ async def _exec_json(handler: dict, envelope: dict, config_dir: Path) -> dict:
                 proc.kill()
             except Exception:
                 pass
-        return {"continue": True}
+        return {"continue": True, "_error": f"timed out after {timeout}s"}
     except Exception as exc:
         _logger.error(f"[{handler['id']}] exec_json error: {exc}")
-        return {"continue": True}
+        return {"continue": True, "_error": str(exc)}
 
     if stderr:
         _logger.debug(f"[{handler['id']}] stderr: {stderr.decode().rstrip()}")
@@ -135,11 +135,15 @@ async def _exec_json(handler: dict, envelope: dict, config_dir: Path) -> dict:
         return json.loads(stdout)
     except json.JSONDecodeError:
         _logger.error(f"[{handler['id']}] exec_json invalid JSON output: {stdout!r}")
-        return {"continue": True}
+        return {"continue": True, "_error": "invalid JSON output"}
 
 
 async def _http_once(handler: dict, envelope: dict) -> dict:
-    """POST the envelope to a remote handler (see registry.register)."""
+    """POST the envelope to a remote handler (see registry.register).
+
+    A failure comes back as `_error` rather than an exception: the pipeline
+    keeps running, but an *outbound* message whose only handler failed this
+    way must not be counted as delivered (pipeline.process_outbound)."""
     startup = handler.get("startup") or {}
     url = startup.get("url", "").rstrip("/") + startup.get("invoke_path", "/invoke")
     try:
@@ -150,4 +154,4 @@ async def _http_once(handler: dict, envelope: dict) -> dict:
             return r.json()
     except Exception as exc:
         _logger.error(f"[{handler['id']}] http invoke error: {exc}")
-        return {"continue": True}
+        return {"continue": True, "_error": str(exc)}

@@ -260,28 +260,43 @@ async def _route_to_plugin_channel(ch: dict, envelope: dict) -> bool:
         "channel_metadata": ch.get("metadata", {}),
         "attachments": (envelope.get("metadata") or {}).get("attachments", []),
     }
+    # Thread the whole exchange under the channel's own id so it reads like a
+    # conversation you had directly with the channel — whatever routed it here.
+    channel_id = ch["channel_id"]
+    reply_meta = dict(
+        envelope.get("_origin_source_meta") or envelope.get("source_meta") or {}
+    )
+    reply_meta.setdefault("chat_id", channel_id)
     reply_context = {
         # For an injected message `source` is "internal"; `_origin_source` is
         # the external source it descends from, which is where a reply has to
         # go back out (Pushover, Telegram, the web client, ...).
         "source": envelope.get("_origin_source") or envelope.get("source"),
-        "source_meta": (
-            envelope.get("_origin_source_meta")
-            or envelope.get("source_meta", {})
-        ),
-        "channel": envelope.get("_transcript_channel") or "pipeline",
+        "source_meta": reply_meta,
+        "channel": channel_id,
         "parent_id": envelope["id"],
     }
-    sent = await registry.send_to_channel(ch["channel_id"], payload, reply_context)
+    sent = await registry.send_to_channel(channel_id, payload, reply_context)
     if sent:
         envelope["handlers_visited"] = envelope.get("handlers_visited", [])
-        envelope["handlers_visited"].append(f"plugin:{ch['channel_id']}")
+        envelope["handlers_visited"].append(f"plugin:{channel_id}")
         _logger.info(
-            f"Routed to plugin channel: {ch['channel_id']} "
+            f"Routed to plugin channel: {channel_id} "
             f"envelope={envelope['id']} text={pipeline_text[:120]!r}"
         )
+        try:
+            transcript.append(
+                chat_id=str(reply_meta["chat_id"]),
+                channel=channel_id,
+                role="user",
+                text=pipeline_text,
+                envelope_id=envelope["id"],
+                source=envelope.get("_origin_source") or envelope.get("source"),
+            )
+        except Exception as exc:
+            _logger.warning(f"transcript append (channel in) failed: {exc}")
     else:
-        _logger.warning(f"Plugin channel {ch['channel_id']} unreachable — send_to_channel failed")
+        _logger.warning(f"Plugin channel {channel_id} unreachable — send_to_channel failed")
     return sent
 
 
@@ -314,9 +329,10 @@ async def process_inbound(envelope: dict) -> None:
     envelope["_transcript_channel"] = channel
     _logger.info(f"inbound [{src}]: {text!r}" + (f" target={target}" if target else ""))
 
-    # Record user message (depth 0 only — no inject echoes)
-    if envelope.get("depth", 0) == 0:
-        _record_user_message(envelope, channel, src)
+    # Record user message (depth 0 only — no inject echoes). Skipped when the
+    # message routes to a plugin channel: _route_to_plugin_channel records it
+    # under the channel's own transcript thread instead.
+    record_user = envelope.get("depth", 0) == 0
 
     if target:
         # API / web direct target — no allow_direct_inject gate (explicit user choice).
@@ -331,6 +347,8 @@ async def process_inbound(envelope: dict) -> None:
                 _logger.error(f"Inject target '{target}' (plugin channel) send failed — discarding")
             return
 
+        if record_user:
+            _record_user_message(envelope, channel, src)
         target_handlers = _resolve_inject_target(target, require_allow_direct=False)
         if target_handlers is None:
             return
@@ -349,6 +367,8 @@ async def process_inbound(envelope: dict) -> None:
             # instead, so the channel must not also answer it on reconnect.
             registry.discard_pending(envelope["id"])
 
+    if record_user:
+        _record_user_message(envelope, channel, src)
     await _run("inbound", envelope)
 
 

@@ -70,4 +70,6 @@ normal `sijba` Jenkins pipeline (image bump + StatefulSet rollout).
 
 ## Status
 
-Not started.
+Done (2026-08-28). Both causes fixed as described: `chat_id` setdefault in
+`webhook()` and the broadcast condition in `reply.deliver()`. Covered by three
+new tests in `tests/test_api.py`; the two behavioural ones fail without the fix.

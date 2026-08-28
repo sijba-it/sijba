@@ -168,6 +168,19 @@ def test_webhook_rejects_bad_token(client):
     assert client.post("/webhook/wrong", json={"text": "x"}).status_code == 403
 
 
+def test_webhook_defaults_chat_id_to_web(client):
+    """Without this the message lands in a bucket the app never reads."""
+    client.post("/webhook/hook", json={"text": "von aussen"})
+
+    assert _first_queued()["source_meta"]["chat_id"] == "web"
+
+
+def test_webhook_keeps_an_explicit_chat_id(client):
+    client.post("/webhook/hook", json={"text": "von aussen", "chat_id": "voice"})
+
+    assert _first_queued()["source_meta"]["chat_id"] == "voice"
+
+
 # ------------------------------------------------------------------
 # Uploads
 # ------------------------------------------------------------------
@@ -286,6 +299,25 @@ async def test_plugin_reply_from_non_web_source_is_not_broadcast(db, replies):
 
     assert replies.drain() == []
     assert transcript.list_messages("42", "projekt-a"), "still persisted"
+
+
+async def test_plugin_reply_from_a_webhook_source_is_broadcast(db, replies):
+    """A webhook has no transport of its own — unlike Telegram above — so the
+    app is the only place its reply can show up, and only if pushed live."""
+    register_channel("cursor", "projekt-a")
+    await registry.send_to_channel(
+        "projekt-a",
+        {"envelope_id": "e1"},
+        {"source": "webhook:voice", "source_meta": {"chat_id": "web"},
+         "channel": "projekt-a"},
+    )
+
+    await api._handle_plugin_reply(
+        {"channel": "projekt-a", "envelope_id": "e1", "text": "fertig"}
+    )
+
+    events = replies.drain()
+    assert [e["text"] for e in events] == ["fertig"]
 
 
 # ------------------------------------------------------------------

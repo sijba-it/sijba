@@ -584,6 +584,9 @@ async def webhook(token: str, request: Request):
     source_meta = {"remote": str(request.client)}
     if body.get("chat_id") is not None:
         source_meta["chat_id"] = str(body["chat_id"])
+    # Same default as /api/message: without it the message lands in a
+    # transcript bucket the app never reads, i.e. it is invisible there.
+    source_meta.setdefault("chat_id", "web")
 
     envelope = new_envelope(source=source, text=text, source_meta=source_meta)
     target = (str(body.get("target") or "").strip()) or None

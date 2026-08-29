@@ -94,8 +94,31 @@ Optional body fields:
 
 | Field | Effect |
 |-------|--------|
+| `text` / `message` | The message. |
 | `chat_id` | Records the exchange in that transcript, which is how the reply becomes visible in the app. Without it the message is not stored. |
 | `target` | Handler id, category, or plugin channel — skips routing and goes straight there. |
+
+#### multipart/form-data (Pebble Index)
+
+The endpoint also accepts `multipart/form-data` / `application/x-www-form-urlencoded`,
+so a [Pebble Index 01](https://help.repebble.com/en/articles/15724406-index-advanced-features-mcp-webhook)
+ring can post straight to it — point its webhook URL at `/webhook/<token>` and
+send **transcription only**:
+
+| Part | Used as |
+|------|---------|
+| `transcription` (or `text` / `message`) | the message — **required** (400 otherwise) |
+| `recordedAt` | `source_meta.recorded_at` (ms since epoch) |
+| `client` | `source_meta.client` (e.g. `ring`) |
+| `chat_id` | transcript bucket; if absent (Pebble can't set it) every note from this webhook threads under the **source name** instead of the shared `web` bucket |
+| `target` | as above |
+| `audio` | ignored |
+
+```bash
+curl -X POST http://localhost:8080/webhook/$VOICE_WEBHOOK_TOKEN \
+  -F 'transcription=Einkauf Milch und Butter' \
+  -F 'recordedAt=1730000000000' -F 'client=ring'
+```
 
 ### Named webhooks
 

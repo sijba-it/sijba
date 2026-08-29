@@ -567,36 +567,66 @@ def _webhook_source(token: str) -> Optional[str]:
     return None
 
 
+def _form_str(form, *keys: str) -> Optional[str]:
+    """First non-empty string value among `keys` in a starlette FormData.
+    Skips file parts (UploadFile) so a stray `audio` upload can't sneak in."""
+    for key in keys:
+        val = form.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
 @app.post("/webhook/{token}")
 async def webhook(token: str, request: Request):
-    """Inject a message from an external system (voice shortcut, IoT, ...).
+    """Inject a message from an external system (voice shortcut, IoT, Pebble Index, ...).
 
     Which webhook the token belongs to decides the envelope source, so each
     one can be routed — and answered — differently via match.source.
 
-    Body:
-      text / message  the message (falls back to the raw body)
-      chat_id         (optional) transcript to record this under, which is how
-                      the reply becomes visible in the app
-      target          (optional) handler id, category, or plugin channel
+    Accepts JSON or multipart/form-data:
+
+      JSON:  {"text"|"message": ..., "chat_id"?: ..., "target"?: ...}
+      form:  transcription|text=...   (Pebble Index sends `transcription`,
+             `recordedAt` in ms, `client`; an `audio` file part is ignored)
+
+    `chat_id` decides which transcript bucket the message and its reply land in
+    (how the app surfaces it). A form POST that can't set it — Pebble — is
+    threaded under the source name.
     """
     source = _webhook_source(token)
     if source is None:
         _logger.warning(f"webhook: rejected unknown token from {request.client}")
         raise HTTPException(status_code=403, detail="Invalid token")
 
-    body = await request.json()
-    text = body.get("text", body.get("message", str(body)))
-
     source_meta = {"remote": str(request.client)}
-    if body.get("chat_id") is not None:
-        source_meta["chat_id"] = str(body["chat_id"])
-    # Same default as /api/message: without it the message lands in a
-    # transcript bucket the app never reads, i.e. it is invisible there.
-    source_meta.setdefault("chat_id", "web")
+    ctype = request.headers.get("content-type", "").split(";", 1)[0].strip()
+
+    if ctype in ("multipart/form-data", "application/x-www-form-urlencoded"):
+        form = await request.form()
+        text = _form_str(form, "transcription", "text", "message")
+        if not text:
+            raise HTTPException(status_code=400, detail="no transcription/text in form")
+        chat_id = _form_str(form, "chat_id")
+        recorded_at = _form_str(form, "recordedAt")
+        if recorded_at:
+            source_meta["recorded_at"] = recorded_at
+        client = _form_str(form, "client")
+        if client:
+            source_meta["client"] = client
+        target = _form_str(form, "target")
+        # No chat_id on the wire (Pebble can't set one) → thread every note
+        # from this webhook under its source, not the shared "web" bucket.
+        source_meta["chat_id"] = chat_id or source
+    else:
+        body = await request.json()
+        text = body.get("text", body.get("message", str(body)))
+        if body.get("chat_id") is not None:
+            source_meta["chat_id"] = str(body["chat_id"])
+        source_meta.setdefault("chat_id", "web")
+        target = (str(body.get("target") or "").strip()) or None
 
     envelope = new_envelope(source=source, text=text, source_meta=source_meta)
-    target = (str(body.get("target") or "").strip()) or None
     if target:
         envelope["_target"] = target
 

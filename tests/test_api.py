@@ -190,6 +190,55 @@ def test_webhook_keeps_an_explicit_chat_id(client):
     assert _first_queued()["source_meta"]["chat_id"] == "voice"
 
 
+def test_webhook_accepts_pebble_multipart(client):
+    """Pebble Index posts multipart/form-data: transcription + recordedAt + client."""
+    r = client.post(
+        "/webhook/hook",
+        data={"recordedAt": "1730000000000", "client": "ring"},
+        files={"transcription": (None, "Einkauf Milch und Butter")},
+    )
+
+    assert r.status_code == 200
+    env = _first_queued()
+    assert env["text"] == "Einkauf Milch und Butter"
+    assert env["source_meta"]["recorded_at"] == "1730000000000"
+    assert env["source_meta"]["client"] == "ring"
+    # Pebble can't set chat_id → threaded under the source, not "web".
+    assert env["source_meta"]["chat_id"] == "webhook"
+
+
+def test_webhook_accepts_form_urlencoded(client):
+    r = client.post("/webhook/hook", data={"transcription": "hallo welt"})
+
+    assert r.status_code == 200
+    assert _first_queued()["text"] == "hallo welt"
+
+
+def test_webhook_form_without_transcription_is_rejected(client):
+    r = client.post("/webhook/hook", data={"client": "ring"})
+
+    assert r.status_code == 400
+
+
+def test_webhook_form_ignores_an_audio_part(client):
+    r = client.post(
+        "/webhook/hook",
+        files={
+            "transcription": (None, "nur der text zählt"),
+            "audio": ("note.m4a", b"\x00\x01\x02fake", "audio/mp4"),
+        },
+    )
+
+    assert r.status_code == 200
+    assert _first_queued()["text"] == "nur der text zählt"
+
+
+def test_webhook_form_honours_an_explicit_chat_id(client):
+    client.post("/webhook/hook", data={"transcription": "x", "chat_id": "voice"})
+
+    assert _first_queued()["source_meta"]["chat_id"] == "voice"
+
+
 # ------------------------------------------------------------------
 # Uploads
 # ------------------------------------------------------------------

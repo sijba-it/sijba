@@ -20,9 +20,16 @@ LLM_MODEL           Model name (default: gpt-4o-mini)
 LLM_FORMAT          openai (default) | anthropic
 LLM_TEMPERATURE     Temperature (default: 0.2 — low for routing)
 LLM_MAX_TOKENS      Max tokens (default: 512 — routing responses are short)
-ROUTER_RULES        Extra instructions appended to the routing prompt. Combined
-                    with `match.source`, this is how you run several routers
-                    that behave differently per input (voice vs Telegram vs web).
+ROUTER_RULES        Extra instructions for the routing prompt. Combined with
+                    `match.source`, this is how you run several routers that
+                    behave differently per input (voice vs Telegram vs web).
+                    When set, these rules lead the prompt as the primary target
+                    spec instead of being tacked on after the generic list.
+ROUTER_HIDE_HANDLER_HINTS
+                    Truthy -> do not list the auto-discovered handler/channel
+                    router_hints in the prompt. Use it when ROUTER_RULES already
+                    names every target and the generic hints ("Cursor agent for
+                    project X") only add noise and bias the model toward NONE.
 
 Handler config example
 ----------------------
@@ -47,6 +54,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -65,6 +73,8 @@ MAX_TOKENS  = int(os.environ.get("LLM_MAX_TOKENS", "512"))
 # router handlers behave differently: give each one its own ROUTER_RULES and
 # scope it to a source with `match.source` (e.g. a voice webhook vs Telegram).
 EXTRA_RULES = os.environ.get("ROUTER_RULES", "").strip()
+_TRUTHY = {"1", "true", "yes", "on"}
+HIDE_HINTS = os.environ.get("ROUTER_HIDE_HANDLER_HINTS", "").strip().lower() in _TRUTHY
 
 
 # ---------------------------------------------------------------------------
@@ -129,10 +139,34 @@ def _call_llm(messages: list) -> str:
 
 def _build_system_prompt(handler_summaries: list[dict]) -> str:
     hints = "\n".join(
-        f"- [{h['id']}] {h['router_hint']}"
+        f"- {h['id']} — {h['router_hint']}"
         for h in handler_summaries
     )
-    extra = f"\n\nADDITIONAL RULES:\n{EXTRA_RULES}" if EXTRA_RULES else ""
+
+    output_rules = """OUTPUT:
+- To route: output only the trigger command — its @mention or trigger word,
+  then the relevant message text. Nothing else: no quotes, no backticks, no
+  code fence, no label, no explanation.
+- If nothing fits: output exactly NONE"""
+
+    if EXTRA_RULES:
+        # ROUTER_RULES is the authoritative target spec. The auto-discovered
+        # hints are, at most, secondary context — listing them first (and
+        # calling every message a possible "no match") is what makes the
+        # router fire on almost nothing.
+        blocks = [EXTRA_RULES]
+        if hints and not HIDE_HINTS:
+            blocks.append(
+                "Other targets that exist (usually NOT what you want here — only "
+                "route to one if the rules above clearly point at it):\n" + hints
+            )
+        blocks.append(output_rules)
+        blocks.append(
+            "Bias: when the message plausibly fits one of the routing rules, "
+            "route it. Use NONE only when it truly carries nothing actionable."
+        )
+        return "\n\n".join(blocks)
+
     return f"""You are a routing assistant. Your only job is to detect if a message should
 be handled by one of the available targets and output the correct trigger command.
 
@@ -140,13 +174,46 @@ Available targets:
 {hints}
 
 RULES:
-- If the message clearly matches a target → respond with ONLY the exact trigger
-  command, keeping the rest of the user's request after it.
-  Examples: "iobroker set Bubble true"
-            "@projekt-a fix the failing test"
+- If the message matches or plausibly implies a target → respond with ONLY the
+  exact trigger command, keeping the rest of the user's request after it.
+  Examples: iobroker set Bubble true
+            @projekt-a fix the failing test
 - If the message does NOT match any target → respond with exactly: NONE
 
-Do not explain. Do not answer questions. Output only the trigger command or NONE.{extra}"""
+Do not explain. Do not answer questions. Output only the trigger command or NONE."""
+
+
+def _clean_reply(reply: str, mentions: list[str]) -> str:
+    """Strip the wrapping a small model tends to add around the bare command.
+
+    Handles code fences, surrounding quotes/backticks, a leading list marker,
+    a leading "Output:"/"Route:" label, and a short lead-in before an @mention
+    ("Route this to @obsidian ..." -> "@obsidian ...").
+    """
+    r = reply.strip()
+
+    if r.startswith("```"):
+        r = r.strip("`").strip()
+        r = re.sub(r"^[A-Za-z0-9_-]+\n", "", r)
+
+    r = re.sub(r"^(output|route|command|antwort|ergebnis|ziel)\s*[:\-]\s*",
+               "", r, flags=re.I)
+    r = re.sub(r"^[-*]\s+", "", r)
+    r = r.strip().strip("\"'`").strip()
+
+    # First line only — the command is one line; anything after is commentary.
+    r = r.splitlines()[0].strip() if r else r
+
+    # If an @mention appears a few words in, slice from it.
+    low = r.lower()
+    hit = min(
+        (low.find(m.lower()) for m in mentions if 0 < low.find(m.lower()) <= 40),
+        default=-1,
+    )
+    if hit > 0:
+        r = r[hit:].strip()
+
+    return r
 
 
 # ---------------------------------------------------------------------------
@@ -187,19 +254,20 @@ def main() -> None:
         print(json.dumps({"continue": True}))
         return
 
-    reply = reply.strip()
-
     # Check if the reply looks like a trigger command for a known handler
     # by seeing if it starts with a known handler id or matches a known prefix.
     # If so, inject it back into the pipeline instead of responding directly.
     known_ids = {h["id"] for h in handler_summaries}
+    mentions = [hid for hid in known_ids if hid.startswith("@")]
+
+    reply = _clean_reply(reply, mentions)
 
     is_trigger = any(
         reply.lower().startswith(hid.lower())
         for hid in known_ids
     )
 
-    if reply.upper() == "NONE" or not is_trigger:
+    if reply.upper() == "NONE" or not reply or not is_trigger:
         # Could not route — pass through to next handler (e.g. LLM)
         print("[router] no route found, continuing", file=sys.stderr, flush=True)
         print(json.dumps({"continue": True}))

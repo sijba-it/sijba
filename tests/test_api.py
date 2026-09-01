@@ -391,6 +391,34 @@ async def test_plugin_reply_from_a_webhook_source_is_broadcast(db, replies):
     assert [e["text"] for e in events] == ["fertig"]
     # The app filters its per-webhook view by this field.
     assert events[0]["source"] == "webhook:voice"
+    assert events[0]["in_pipeline"] is True
+    mirror = transcript.list_messages(
+        transcript.PIPELINE_CHAT_ID, transcript.PIPELINE_CHANNEL
+    )
+    assert [(m["role"], m["text"]) for m in mirror] == [("bot", "fertig")]
+
+
+async def test_silent_no_output_reply_stays_out_of_the_pipeline_view(db, replies):
+    """@obsidian filing a voice note answers "(no output)" — it belongs in its
+    own channel thread but would be empty-bubble noise in the pipeline view."""
+    register_channel("cursor", "obsidian")
+    await registry.send_to_channel(
+        "obsidian",
+        {"envelope_id": "e1"},
+        {"source": "webhook:voice", "source_meta": {"chat_id": "webhook:voice"},
+         "channel": "obsidian"},
+    )
+
+    await api._handle_plugin_reply(
+        {"channel": "obsidian", "envelope_id": "e1", "text": "(no output)"}
+    )
+
+    events = replies.drain()
+    assert events[0]["in_pipeline"] is False
+    assert transcript.list_messages("webhook:voice", "obsidian"), "own thread keeps it"
+    assert transcript.list_messages(
+        transcript.PIPELINE_CHAT_ID, transcript.PIPELINE_CHANNEL
+    ) == []
 
 
 # ------------------------------------------------------------------

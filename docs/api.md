@@ -172,7 +172,7 @@ client of its own, e.g. a `POST /webhook/{token}` call — pushed so it shows up
 live), `{"type": "delivery_failed"}`, `{"type": "channel_status"}`. Events for
 web/app/webhook sources carry `"in_pipeline": true` — they also belong in the
 cross-source `pipeline` transcript bucket, even when `channel` names a plugin
-channel the message routed through.
+channel the message routed through (cleared for a silent `(no output)` run).
 
 ```bash
 curl -N http://localhost:8080/api/logs \

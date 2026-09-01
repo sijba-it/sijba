@@ -627,6 +627,9 @@ async def webhook(token: str, request: Request):
         target = (str(body.get("target") or "").strip()) or None
 
     envelope = new_envelope(source=source, text=text, source_meta=source_meta)
+    # External entry point with no live client of its own — ask the pipeline to
+    # push this message to web/app clients so it shows up live in the tile.
+    envelope["_activity_broadcast"] = True
     if target:
         envelope["_target"] = target
 

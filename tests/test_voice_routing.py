@@ -230,6 +230,71 @@ async def test_channel_exchange_is_visible_in_its_own_transcript(voice_chain, wi
     ]
 
 
+async def test_voice_exchange_is_mirrored_into_the_pipeline_stream(voice_chain, wired, db):
+    """The Pipeline / per-webhook tiles read one cross-source bucket
+    (transcript.PIPELINE_CHAT_ID), so a voice note that routes off to a plugin
+    channel still shows there — both the incoming text and the reply."""
+    import core.transcript as transcript
+    import core.registry as registry
+    import core.web.api as api
+
+    inbound, _ = wired
+    register_channel("cursor-obs", "obsidian", triggers=["@obsidian"])
+
+    await pipeline.process_inbound(voice_env("Einkauf Kaffee"))
+    await _drain_inbound(inbound)
+
+    child_id = next(
+        eid for eid, e in registry._pending_replies.items()
+        if "[einkauf]" in e["payload"]["text"]
+    )
+    await api._handle_plugin_reply(
+        {"channel": "obsidian", "envelope_id": child_id, "text": "→ Einkaufsliste: Kaffee"}
+    )
+
+    convo = [
+        (m["role"], m["text"], m["source"])
+        for m in transcript.list_messages(
+            transcript.PIPELINE_CHAT_ID, transcript.PIPELINE_CHANNEL
+        )
+    ]
+    assert convo == [
+        ("user", "Einkauf Kaffee", "webhook:voice"),
+        ("bot", "→ Einkaufsliste: Kaffee", "webhook:voice"),
+    ]
+
+
+async def test_activity_broadcast_pushes_the_incoming_note_live(voice_chain, wired, db, replies):
+    """A real POST /webhook/<token> sets _activity_broadcast — the pipeline
+    then emits a user_message event so an open app shows it without a reload."""
+    inbound, _ = wired
+
+    await pipeline.process_inbound(
+        voice_env("nur so ein gedanke", _activity_broadcast=True)
+    )
+    await _drain_inbound(inbound)
+
+    events = [e for e in replies.drain() if e.get("type") == "user_message"]
+    assert [(e["text"], e["source"], e["channel"]) for e in events] == [
+        ("nur so ein gedanke", "webhook:voice", "pipeline")
+    ]
+
+
+async def test_incoming_note_is_not_broadcast_without_the_flag(voice_chain, wired, db, replies):
+    """The web composer's "send as webhook" already echoes locally — no flag,
+    no live user_message event (it is still mirrored into the stream)."""
+    import core.transcript as transcript
+
+    inbound, _ = wired
+    await pipeline.process_inbound(voice_env("nur so ein gedanke"))
+    await _drain_inbound(inbound)
+
+    assert not [e for e in replies.drain() if e.get("type") == "user_message"]
+    assert transcript.list_messages(
+        transcript.PIPELINE_CHAT_ID, transcript.PIPELINE_CHANNEL
+    )[0]["text"] == "nur so ein gedanke"
+
+
 async def test_obsidian_reply_goes_back_out_as_the_voice_source(voice_chain, wired, db):
     """The whole point of keeping the origin source: the cursor agent's reply
     ("→ Einkaufsliste: …") is enqueued outbound as `webhook:voice`, so the

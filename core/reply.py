@@ -67,7 +67,8 @@ def deliver(
     # user over its own transport, a webhook reply only ever becomes visible
     # in the app — so it has to be pushed live too. Deliberately not widened
     # beyond that; the other sources carry their own return path.
-    if source in ("web", "app") or source.startswith("webhook"):
+    in_pipeline_view = source in ("web", "app") or source.startswith("webhook")
+    if in_pipeline_view:
         state.broadcast_reply({
             "type": event,
             "text": text,
@@ -76,14 +77,33 @@ def deliver(
             "source": source,
             "source_meta": source_meta,
             "channel": channel,
+            # Also belongs in the cross-source Pipeline / per-webhook tiles,
+            # even when `channel` points at a plugin channel it routed through.
+            "in_pipeline": True,
         })
 
-    if not final:
+    if not final or not text:
         return
+
+    # Mirror into the shared pipeline-activity stream so the Pipeline / per-
+    # webhook tiles show the reply too, not just the plugin-channel thread.
+    if in_pipeline_view:
+        try:
+            transcript.append(
+                chat_id=transcript.PIPELINE_CHAT_ID,
+                channel=transcript.PIPELINE_CHANNEL,
+                role="bot",
+                text=text,
+                handler_id=handler_id,
+                envelope_id=envelope_id,
+                source=source,
+            )
+        except Exception as exc:
+            _logger.warning(f"transcript append (pipeline mirror, bot) failed: {exc}")
 
     # Cross-device replay. Never let a storage hiccup break delivery.
     chat_id = source_meta.get("chat_id")
-    if not (chat_id and text):
+    if not chat_id:
         return
     try:
         transcript.append(

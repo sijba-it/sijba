@@ -166,6 +166,14 @@ Route and answer it with handlers scoped to that source:
 
 SSE clients that cannot set `Authorization` may pass `?token=<auth_token>`.
 
+`/api/replies` events: `{"type": "reply" | "reply_chunk"}` (bot output),
+`{"type": "user_message"}` (an inbound message from an entry point with no
+client of its own, e.g. a `POST /webhook/{token}` call — pushed so it shows up
+live), `{"type": "delivery_failed"}`, `{"type": "channel_status"}`. Events for
+web/app/webhook sources carry `"in_pipeline": true` — they also belong in the
+cross-source `pipeline` transcript bucket, even when `channel` names a plugin
+channel the message routed through.
+
 ```bash
 curl -N http://localhost:8080/api/logs \
   -H "Authorization: Bearer secret"
@@ -183,6 +191,11 @@ curl "http://localhost:8080/api/transcript?chat_id=web&channel=pipeline&limit=50
 ```
 
 `channel` is `pipeline` for the full inbound chain, or a handler id for direct-target chats.
+
+`chat_id=pipeline&channel=pipeline` is the **cross-source activity stream**: every
+depth-0 web/app/webhook message and its reply, mirrored here regardless of which
+`chat_id` or plugin channel it actually threaded under. Backs the app's Pipeline
+and per-webhook tiles.
 
 ---
 

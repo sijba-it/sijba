@@ -300,6 +300,51 @@ async def _route_to_plugin_channel(ch: dict, envelope: dict) -> bool:
     return sent
 
 
+def _in_pipeline_view(src: str) -> bool:
+    """Sources whose traffic is surfaced in the cross-source pipeline view
+    (the "Pipeline" and per-webhook tiles). Kept in sync with the same check
+    in reply.deliver()."""
+    return src in ("web", "app") or src.startswith("webhook")
+
+
+def _record_pipeline_inbound(envelope: dict, src: str) -> None:
+    """Mirror a freshly-arrived message into the shared pipeline-activity
+    stream (`transcript.PIPELINE_CHAT_ID`). Unlike `_record_user_message` this
+    runs for every depth-0 web/app/webhook message — including ones that then
+    route straight to a plugin channel — so the Pipeline / per-webhook tiles
+    show the whole flow. Broadcasts a live `user_message` event only when the
+    entry point asked for it (`_activity_broadcast`, set by the webhook
+    endpoint) — the web composer already echoes its own sends locally. Never
+    fatal."""
+    if not _in_pipeline_view(src):
+        return
+    body = envelope.get("pipeline_text") or envelope.get("text") or ""
+    attachments = (envelope.get("metadata") or {}).get("attachments") or None
+    if not (body or attachments):
+        return
+    try:
+        transcript.append(
+            chat_id=transcript.PIPELINE_CHAT_ID,
+            channel=transcript.PIPELINE_CHANNEL,
+            role="user",
+            text=body,
+            envelope_id=envelope.get("id"),
+            source=src,
+            attachments=attachments,
+        )
+    except Exception as exc:
+        _logger.warning(f"transcript append (pipeline mirror, user) failed: {exc}")
+    if envelope.get("_activity_broadcast"):
+        state.broadcast_reply({
+            "type": "user_message",
+            "text": body,
+            "envelope_id": envelope.get("id"),
+            "source": src,
+            "channel": transcript.PIPELINE_CHANNEL,
+            "source_meta": envelope.get("source_meta", {}),
+        })
+
+
 def _record_user_message(envelope: dict, channel: str, src: str) -> None:
     """Persist the incoming message for cross-device replay. Never fatal."""
     chat_id = (envelope.get("source_meta") or {}).get("chat_id")
@@ -333,6 +378,11 @@ async def process_inbound(envelope: dict) -> None:
     # message routes to a plugin channel: _route_to_plugin_channel records it
     # under the channel's own transcript thread instead.
     record_user = envelope.get("depth", 0) == 0
+
+    # The cross-source pipeline view mirrors every depth-0 web/app/webhook
+    # message regardless of where it routes next (plugin channel included).
+    if record_user:
+        _record_pipeline_inbound(envelope, src)
 
     if target:
         # API / web direct target — no allow_direct_inject gate (explicit user choice).

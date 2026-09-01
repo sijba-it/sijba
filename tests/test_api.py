@@ -131,6 +131,19 @@ def test_message_source_is_passed_through(client):
     assert env["source_meta"]["chat_id"] == "web"
 
 
+def test_webhook_flags_the_envelope_for_live_broadcast(client):
+    """A webhook has no client of its own — the pipeline must push the
+    incoming message to web/app clients so it shows up live in the tile."""
+    client.post("/webhook/hook", json={"text": "von aussen"})
+    assert _first_queued()["_activity_broadcast"] is True
+
+
+def test_api_message_is_not_flagged_for_live_broadcast(client):
+    """The web composer already echoes its own sends locally."""
+    client.post("/api/message", json={"text": "hallo", "source": "webhook:voice"})
+    assert "_activity_broadcast" not in _first_queued()
+
+
 def test_message_target_is_passed_through(client):
     r = client.post("/api/message", json={"text": "hallo", "target": "projekt-a"})
 

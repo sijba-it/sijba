@@ -16,6 +16,14 @@ MAX_TEXT_CHARS = 8000          # truncate oversized blobs
 API_DEFAULT_LIMIT = 100
 API_MAX_LIMIT = 200
 
+# Well-known bucket for the cross-source "pipeline activity" view. Every
+# depth-0 web/app/webhook message and every top-level reply for those sources
+# is mirrored here (in addition to its own chat_id/plugin-channel thread), so
+# one query returns the whole flow no matter which chat_id or plugin channel
+# it actually threaded under. Backs the "Pipeline" and per-webhook tiles.
+PIPELINE_CHAT_ID = "pipeline"
+PIPELINE_CHANNEL = "pipeline"
+
 
 def init() -> None:
     with db.write() as conn:

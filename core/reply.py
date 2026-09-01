@@ -20,6 +20,12 @@ _logger = log.get("reply")
 # Injected at startup by main.py to avoid a circular import with msg_queue.
 _enqueue_outbound = None
 
+# Placeholder the cursor / claude plugins send when an agent run produced no
+# text (e.g. @obsidian silently filing a voice note). Still delivered to its
+# own channel thread, but kept out of the cross-source pipeline view so voice
+# notes don't each leave an empty bubble there.
+_NO_OUTPUT = "(no output)"
+
 
 def configure(enqueue_outbound) -> None:
     global _enqueue_outbound
@@ -68,6 +74,10 @@ def deliver(
     # in the app — so it has to be pushed live too. Deliberately not widened
     # beyond that; the other sources carry their own return path.
     in_pipeline_view = source in ("web", "app") or source.startswith("webhook")
+    # Belongs in the cross-source Pipeline / per-webhook tiles too, even when
+    # `channel` names a plugin channel it routed through — but not a silent
+    # "(no output)" run.
+    show_in_pipeline = in_pipeline_view and text != _NO_OUTPUT
     if in_pipeline_view:
         state.broadcast_reply({
             "type": event,
@@ -77,9 +87,7 @@ def deliver(
             "source": source,
             "source_meta": source_meta,
             "channel": channel,
-            # Also belongs in the cross-source Pipeline / per-webhook tiles,
-            # even when `channel` points at a plugin channel it routed through.
-            "in_pipeline": True,
+            "in_pipeline": show_in_pipeline,
         })
 
     if not final or not text:
@@ -87,7 +95,7 @@ def deliver(
 
     # Mirror into the shared pipeline-activity stream so the Pipeline / per-
     # webhook tiles show the reply too, not just the plugin-channel thread.
-    if in_pipeline_view:
+    if show_in_pipeline:
         try:
             transcript.append(
                 chat_id=transcript.PIPELINE_CHAT_ID,

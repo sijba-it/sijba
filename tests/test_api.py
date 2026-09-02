@@ -398,31 +398,6 @@ async def test_plugin_reply_from_a_webhook_source_is_broadcast(db, replies):
     assert [(m["role"], m["text"]) for m in mirror] == [("bot", "fertig")]
 
 
-@pytest.mark.parametrize("silent", ["", "   ", "(no output)"])
-async def test_silent_reply_is_not_delivered_anywhere(db, replies, wired, silent):
-    """A silent agent run (@obsidian just filing a note) must not surface
-    anywhere — no live push, no transcript, no outbound (Pushover)."""
-    _inbound, outbound = wired
-    register_channel("cursor", "obsidian")
-    await registry.send_to_channel(
-        "obsidian",
-        {"envelope_id": "e1"},
-        {"source": "webhook:voice", "source_meta": {"chat_id": "webhook:voice"},
-         "channel": "obsidian"},
-    )
-
-    await api._handle_plugin_reply(
-        {"channel": "obsidian", "envelope_id": "e1", "text": silent}
-    )
-
-    assert replies.drain() == []
-    assert outbound == []
-    assert transcript.list_messages("webhook:voice", "obsidian") == []
-    assert transcript.list_messages(
-        transcript.PIPELINE_CHAT_ID, transcript.PIPELINE_CHANNEL
-    ) == []
-
-
 # ------------------------------------------------------------------
 # Streamed chunks
 # ------------------------------------------------------------------

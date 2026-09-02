@@ -20,16 +20,22 @@ _logger = log.get("reply")
 # Injected at startup by main.py to avoid a circular import with msg_queue.
 _enqueue_outbound = None
 
-# Placeholder the cursor / claude plugins send when an agent run produced no
-# text (e.g. @obsidian silently filing a voice note). Still delivered to its
-# own channel thread, but kept out of the cross-source pipeline view so voice
-# notes don't each leave an empty bubble there.
+# Legacy placeholder older cursor / claude plugin builds send for a silent
+# agent run (e.g. @obsidian just filing a voice note). Treated as "no reply".
 _NO_OUTPUT = "(no output)"
 
 
 def configure(enqueue_outbound) -> None:
     global _enqueue_outbound
     _enqueue_outbound = enqueue_outbound
+
+
+def _is_silent(text: str) -> bool:
+    """A reply with nothing to say — don't deliver it anywhere (no outbound,
+    no live push, no transcript). Covers a genuinely empty reply and the
+    legacy "(no output)" placeholder."""
+    stripped = (text or "").strip()
+    return not stripped or stripped == _NO_OUTPUT
 
 
 def deliver(
@@ -54,6 +60,13 @@ def deliver(
     """
     source_meta = source_meta or {}
 
+    # A silent agent run (@obsidian filing a note, ...) has nothing to say —
+    # it must not surface anywhere: no Pushover/Telegram push, no live bubble,
+    # no transcript row. Streamed deltas (final=False) are handled upstream.
+    if final and _is_silent(text):
+        _logger.info(f"[{handler_id}] silent reply — nothing delivered")
+        return
+
     # Outbound handlers scoped with match.source — this is how a reply gets
     # back out to the channel it came from (Pushover for a voice webhook,
     # Telegram for a Telegram message, ...).
@@ -74,10 +87,6 @@ def deliver(
     # in the app — so it has to be pushed live too. Deliberately not widened
     # beyond that; the other sources carry their own return path.
     in_pipeline_view = source in ("web", "app") or source.startswith("webhook")
-    # Belongs in the cross-source Pipeline / per-webhook tiles too, even when
-    # `channel` names a plugin channel it routed through — but not a silent
-    # "(no output)" run.
-    show_in_pipeline = in_pipeline_view and text != _NO_OUTPUT
     if in_pipeline_view:
         state.broadcast_reply({
             "type": event,
@@ -87,7 +96,9 @@ def deliver(
             "source": source,
             "source_meta": source_meta,
             "channel": channel,
-            "in_pipeline": show_in_pipeline,
+            # Belongs in the cross-source Pipeline / per-webhook tiles too,
+            # even when `channel` names a plugin channel it routed through.
+            "in_pipeline": True,
         })
 
     if not final or not text:
@@ -95,7 +106,7 @@ def deliver(
 
     # Mirror into the shared pipeline-activity stream so the Pipeline / per-
     # webhook tiles show the reply too, not just the plugin-channel thread.
-    if show_in_pipeline:
+    if in_pipeline_view:
         try:
             transcript.append(
                 chat_id=transcript.PIPELINE_CHAT_ID,

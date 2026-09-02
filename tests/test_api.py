@@ -398,9 +398,11 @@ async def test_plugin_reply_from_a_webhook_source_is_broadcast(db, replies):
     assert [(m["role"], m["text"]) for m in mirror] == [("bot", "fertig")]
 
 
-async def test_silent_no_output_reply_stays_out_of_the_pipeline_view(db, replies):
-    """@obsidian filing a voice note answers "(no output)" — it belongs in its
-    own channel thread but would be empty-bubble noise in the pipeline view."""
+@pytest.mark.parametrize("silent", ["", "   ", "(no output)"])
+async def test_silent_reply_is_not_delivered_anywhere(db, replies, wired, silent):
+    """A silent agent run (@obsidian just filing a note) must not surface
+    anywhere — no live push, no transcript, no outbound (Pushover)."""
+    _inbound, outbound = wired
     register_channel("cursor", "obsidian")
     await registry.send_to_channel(
         "obsidian",
@@ -410,12 +412,12 @@ async def test_silent_no_output_reply_stays_out_of_the_pipeline_view(db, replies
     )
 
     await api._handle_plugin_reply(
-        {"channel": "obsidian", "envelope_id": "e1", "text": "(no output)"}
+        {"channel": "obsidian", "envelope_id": "e1", "text": silent}
     )
 
-    events = replies.drain()
-    assert events[0]["in_pipeline"] is False
-    assert transcript.list_messages("webhook:voice", "obsidian"), "own thread keeps it"
+    assert replies.drain() == []
+    assert outbound == []
+    assert transcript.list_messages("webhook:voice", "obsidian") == []
     assert transcript.list_messages(
         transcript.PIPELINE_CHAT_ID, transcript.PIPELINE_CHANNEL
     ) == []

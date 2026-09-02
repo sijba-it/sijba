@@ -172,7 +172,8 @@ client of its own, e.g. a `POST /webhook/{token}` call — pushed so it shows up
 live), `{"type": "delivery_failed"}`, `{"type": "channel_status"}`. Events for
 web/app/webhook sources carry `"in_pipeline": true` — they also belong in the
 cross-source `pipeline` transcript bucket, even when `channel` names a plugin
-channel the message routed through (cleared for a silent `(no output)` run).
+channel the message routed through. A silent agent run (empty / `(no output)`
+reply) is dropped entirely — no event, no outbound, no transcript.
 
 ```bash
 curl -N http://localhost:8080/api/logs \

@@ -262,11 +262,14 @@ async def _route_to_plugin_channel(ch: dict, envelope: dict) -> bool:
     }
     # Thread the whole exchange under the channel's own id so it reads like a
     # conversation you had directly with the channel — whatever routed it here.
+    # Force chat_id to the channel_id itself (not whichever caller triggered
+    # this turn) so voice/telegram/app exchanges with the same channel all
+    # land in the one bucket the app's tile for it actually reads.
     channel_id = ch["channel_id"]
     reply_meta = dict(
         envelope.get("_origin_source_meta") or envelope.get("source_meta") or {}
     )
-    reply_meta.setdefault("chat_id", channel_id)
+    reply_meta["chat_id"] = channel_id
     reply_context = {
         # For an injected message `source` is "internal"; `_origin_source` is
         # the external source it descends from, which is where a reply has to

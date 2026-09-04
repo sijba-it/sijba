@@ -201,7 +201,10 @@ async def test_recherche_keyword_routes_to_its_own_channel(voice_chain, wired, d
 
 async def test_channel_exchange_is_visible_in_its_own_transcript(voice_chain, wired, db):
     """What the channel received and its final reply thread under the channel's
-    id, so it reads like a conversation you had with @obsidian directly."""
+    own id — not whatever chat_id the triggering webhook call happened to
+    carry — so it reads like a conversation you had with @obsidian directly,
+    the same one the app's Obsidian tile reads regardless of what routed a
+    given message there."""
     import core.transcript as transcript
     import core.registry as registry
     import core.web.api as api
@@ -222,12 +225,13 @@ async def test_channel_exchange_is_visible_in_its_own_transcript(voice_chain, wi
         {"channel": "obsidian", "envelope_id": child_id, "text": "→ Einkaufsliste: Kaffee"}
     )
 
-    convo = [(m["role"], m["text"]) for m in transcript.list_messages("voice-42", "obsidian")]
+    convo = [(m["role"], m["text"]) for m in transcript.list_messages("obsidian", "obsidian")]
     assert convo == [
         ("user", "@obsidian [voice] Einkauf Kaffee"),
         ("user", "@obsidian [einkauf] Kaffee"),
         ("bot", "→ Einkaufsliste: Kaffee"),
     ]
+    assert not transcript.list_messages("voice-42", "obsidian")
 
 
 async def test_voice_exchange_is_mirrored_into_the_pipeline_stream(voice_chain, wired, db):

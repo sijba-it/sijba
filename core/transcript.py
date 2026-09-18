@@ -94,6 +94,7 @@ def append(
     envelope_id: str | None = None,
     source: str | None = None,
     attachments: list | None = None,
+    delivery_status: str | None = None,
 ) -> None:
     if not chat_id or not (text or attachments):
         return
@@ -102,8 +103,9 @@ def append(
     with db.write() as conn:
         conn.execute(
             "INSERT INTO transcript"
-            " (ts, chat_id, channel, role, text, handler_id, envelope_id, source, attachments)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
+            " (ts, chat_id, channel, role, text, handler_id, envelope_id, source,"
+            "  attachments, delivery_status)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 db.now(),
                 str(chat_id),
@@ -114,6 +116,7 @@ def append(
                 envelope_id,
                 source,
                 json.dumps(attachments) if attachments else None,
+                delivery_status,
             ),
         )
         _prune(conn, str(chat_id), str(channel))

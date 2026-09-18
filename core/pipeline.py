@@ -295,9 +295,22 @@ async def _route_to_plugin_channel(ch: dict, envelope: dict) -> bool:
                 text=pipeline_text,
                 envelope_id=envelope["id"],
                 source=envelope.get("_origin_source") or envelope.get("source"),
+                delivery_status="delivered",
             )
         except Exception as exc:
             _logger.warning(f"transcript append (channel in) failed: {exc}")
+        # No ack from the plugin itself — this only confirms send_to_channel's
+        # ws.send() didn't raise, i.e. the message left Core over an open
+        # connection (WhatsApp's single grey tick, not the double one). Good
+        # enough signal without requiring every plugin kind to implement an
+        # application-level ack. Broadcast live so an open app updates the
+        # bubble immediately instead of waiting for its next transcript poll.
+        state.broadcast_reply({
+            "type": "message_delivered",
+            "envelope_id": envelope["id"],
+            "channel": channel_id,
+            "chat_id": channel_id,
+        })
     else:
         _logger.warning(f"Plugin channel {channel_id} unreachable — send_to_channel failed")
     return sent

@@ -13,6 +13,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse
 
 import core.log as log
+import core.channel_permissions as channel_permissions
 import core.msg_queue as queue
 import core.registry as registry
 import core.reply as reply
@@ -196,6 +197,26 @@ async def list_plugin_channels():
     return registry.list_plugin_channels()
 
 
+@app.get("/api/admin/channel-permissions", dependencies=[Depends(_check_auth)])
+async def get_channel_permissions():
+    return channel_permissions.all_permissions()
+
+
+@app.patch("/api/admin/channel-permissions/{channel_id:path}", dependencies=[Depends(_check_auth)])
+async def set_channel_permission(channel_id: str, request: Request):
+    """Set a channel's permission flags. Called by the Agent Controller
+    (operator-side, trusted the same way registry.json's own `plugin`
+    field already is) — never by the plugin process itself, see
+    core/channel_permissions.py's docstring for why that distinction
+    matters. `channel_id` is path-encoded since it contains a literal
+    colon (e.g. "cursor:obsidian").
+    """
+    body = await request.json()
+    if "can_inject" in body:
+        channel_permissions.set_can_inject(channel_id, bool(body["can_inject"]))
+    return {"channel_id": channel_id, **channel_permissions.all_permissions().get(channel_id, {})}
+
+
 @app.get("/api/webhooks", dependencies=[Depends(_check_auth)])
 async def list_webhooks():
     """Configured webhooks as {name, source} — never the tokens.
@@ -243,6 +264,39 @@ async def _handle_plugin_reply(msg: dict) -> None:
     )
 
 
+async def _handle_plugin_inject(msg: dict) -> None:
+    """Route a {"type": "inject"} message: a plugin channel sending a
+    brand-new message into some other target, not a reply to its own turn
+    (see plugin_ws's protocol docstring). Gated by
+    channel_permissions.can_inject(source channel) — the *sending* plugin
+    process never gets to decide this for itself (see that module's
+    docstring for why); Core is the sole authority, checked fresh on every
+    inject rather than trusted from whatever the plugin claimed at
+    `register` time.
+    """
+    source_channel = msg.get("channel")
+    target = msg.get("target")
+    text = msg.get("text", "")
+    if not source_channel or not target or not text:
+        _logger.warning(
+            f"inject from {source_channel!r} missing channel/target/text — dropped"
+        )
+        return
+    if not channel_permissions.can_inject(source_channel):
+        _logger.warning(
+            f"inject from {source_channel!r} to {target!r} rejected — can_inject not set"
+        )
+        return
+    envelope = new_envelope(
+        source="internal",
+        text=text,
+        source_meta={"injected_by": source_channel},
+    )
+    envelope["_target"] = target
+    queue.enqueue_inbound(envelope)
+    _logger.info(f"inject: {source_channel!r} -> {target!r} ({len(text)} chars)")
+
+
 async def _handle_plugin_reply_chunk(msg: dict) -> None:
     """Route a {"type": "reply_chunk"} streaming delta straight to any
     connected web/app client — never persisted, the final {"type": "reply"}
@@ -287,6 +341,9 @@ async def plugin_ws(websocket: WebSocket):
       client -> server: {"type": "reply", "channel", "envelope_id", "text", "continue"} (final, once;
                           clears Core's pending redelivery entry)
       client -> server: {"type": "channel_update", "channel_id", "metadata"}  (merged into channel metadata)
+      client -> server: {"type": "inject", "channel", "target", "text"}     (new message *from*
+                          `channel` *into* `target`, not a reply to this turn; requires
+                          channel_permissions.can_inject(channel) — see core/channel_permissions.py)
       either direction:  {"type": "ping"} / {"type": "pong"}                (heartbeat)
     """
     token = websocket.query_params.get("token")
@@ -330,6 +387,11 @@ async def plugin_ws(websocket: WebSocket):
                 if plugin_id:
                     registry.plugin_heartbeat(plugin_id)
                 await _handle_plugin_reply_chunk(msg)
+
+            elif mtype == "inject":
+                if plugin_id:
+                    registry.plugin_heartbeat(plugin_id)
+                await _handle_plugin_inject(msg)
 
             elif mtype == "channel_update":
                 if plugin_id:

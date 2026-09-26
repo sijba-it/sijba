@@ -19,6 +19,7 @@ import core.lifecycle as lifecycle
 import core.pipeline as pipeline
 import core.registry as registry
 import core.reply as reply
+import core.channel_permissions as channel_permissions
 from core.envelope import new_envelope
 from core.web.api import app, configure as configure_api
 
@@ -62,6 +63,7 @@ async def main() -> None:
     store.init()
     transcript.init()
     registry.init()
+    channel_permissions.init(config_dir)
     _logger.info(f"Queue/store DB: {db_path}")
 
     # Nothing is in flight yet, so anything still 'claimed' was orphaned by

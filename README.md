@@ -211,3 +211,4 @@ docker run -p 8080:8080 \
 ```
 
 The Docker socket mount is needed when using `runtime: docker` to let SIJBA manage plugin containers. See `docker-compose.yml` for a full compose template (place it in your `sijba-config` repo).
+

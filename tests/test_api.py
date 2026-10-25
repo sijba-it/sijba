@@ -584,3 +584,15 @@ def test_webhook_chat_id_and_target(multi_client):
 def test_webhook_falls_back_to_message_key(multi_client):
     multi_client.post("/webhook/tok-voice", json={"message": "von aussen"})
     assert _first_queued()["text"] == "von aussen"
+
+
+def test_root_redirects_to_config_ui_when_configured(client, monkeypatch):
+    monkeypatch.setenv("SIJBA_CONFIG_UI_URL", "/config-ui/")
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/config-ui/"
+
+
+def test_root_serves_builtin_ui_without_config_ui(client, monkeypatch):
+    monkeypatch.delenv("SIJBA_CONFIG_UI_URL", raising=False)
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 200 and "<html" in r.text.lower()

@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse
 
@@ -82,7 +82,11 @@ def _check_auth(
 # ------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
-async def ui() -> HTMLResponse:
+async def ui():
+    import os
+    config_ui = os.environ.get("SIJBA_CONFIG_UI_URL", "").strip()
+    if config_ui:
+        return RedirectResponse(config_ui, status_code=307)
     ui_path = Path(__file__).parent / "ui.html"
     return HTMLResponse(ui_path.read_text())
 

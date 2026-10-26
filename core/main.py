@@ -20,6 +20,7 @@ import core.pipeline as pipeline
 import core.registry as registry
 import core.reply as reply
 import core.channel_permissions as channel_permissions
+import core.reload as reload
 from core.envelope import new_envelope
 from core.web.api import app, configure as configure_api
 
@@ -115,6 +116,8 @@ async def main() -> None:
     )
     for name in sorted(set((cfg.get("webhooks") or {}).values())):
         _logger.info(f"Webhook configured: webhook:{name}")
+
+    reload.configure(cfg, _source_callback)
 
     # Start persistent handlers (including sources)
     await lifecycle.start_all(state.handlers, config_dir, _source_callback)

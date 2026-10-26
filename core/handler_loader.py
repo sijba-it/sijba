@@ -39,7 +39,7 @@ def _priority_from_filename(stem: str) -> float | None:
     return float(m.group(1)) if m else None
 
 
-def load(config_dir: Path) -> List[Dict[str, Any]]:
+def load(config_dir: Path, errors: List[str] | None = None) -> List[Dict[str, Any]]:
     schema = _get_schema()
     handlers_dir = config_dir / "handlers"
     if not handlers_dir.exists():
@@ -53,6 +53,8 @@ def load(config_dir: Path) -> List[Dict[str, Any]]:
                 handler: Dict[str, Any] = json.load(fh)
         except json.JSONDecodeError as exc:
             _logger.error(f"JSON parse error in {path.name}: {exc}")
+            if errors is not None:
+                errors.append(f"{path.name}: {exc}")
             continue
 
         # Derive priority from filename if not explicit
@@ -70,6 +72,8 @@ def load(config_dir: Path) -> List[Dict[str, Any]]:
             jsonschema.validate(handler, schema)
         except jsonschema.ValidationError as exc:
             _logger.error(f"Handler {path.name} validation error: {exc.message}")
+            if errors is not None:
+                errors.append(f"{path.name}: {exc.message}")
             continue
 
         loaded.append(handler)

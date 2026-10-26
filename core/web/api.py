@@ -191,6 +191,14 @@ async def toggle_handler(handler_id: str):
     return {"id": handler_id, "state": new_state}
 
 
+@app.post("/api/admin/reload", dependencies=[Depends(_check_auth)])
+async def reload_config():
+    """Re-read core.yaml and handlers/ and apply them without a restart."""
+    from core import reload as rl
+
+    return await rl.reload()
+
+
 @app.get("/api/queue", dependencies=[Depends(_check_auth)])
 async def get_queue():
     return queue.depths()

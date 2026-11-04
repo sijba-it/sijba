@@ -69,6 +69,7 @@ async def reload() -> Dict[str, Any]:
         for hid in removed:
             state.handler_states.pop(hid, None)
         state.file_handlers = new_handlers
+        state.load_errors = errors
         for h in new_handlers:
             if h.get("lifecycle") != "persistent":
                 state.handler_states[h["id"]] = "healthy"

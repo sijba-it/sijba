@@ -10,6 +10,9 @@ handlers: List[Dict[str, Any]] = []
 # Handlers loaded from handlers/*.json only (before remote merge)
 file_handlers: List[Dict[str, Any]] = []
 
+# Handler files skipped at the last load (boot or reload), "<file>: <reason>"
+load_errors: List[str] = []
+
 # Dynamically registered remote HTTP handlers: id -> {handler, expires_at, ...}
 registered_handlers: Dict[str, Dict[str, Any]] = {}
 

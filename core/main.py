@@ -84,7 +84,8 @@ async def main() -> None:
     _logger.info(f"Upload dir: {upload_dir}")
 
     # Load handlers (files), then merge any dynamic registrations (none at boot)
-    state.file_handlers = handler_loader.load(config_dir)
+    state.load_errors = []
+    state.file_handlers = handler_loader.load(config_dir, errors=state.load_errors)
     for h in state.file_handlers:
         hid = h["id"]
         if h.get("lifecycle") == "persistent":

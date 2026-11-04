@@ -199,6 +199,12 @@ async def reload_config():
     return await rl.reload()
 
 
+@app.get("/api/admin/load-errors", dependencies=[Depends(_check_auth)])
+async def load_errors():
+    """Handler files skipped at the last load (boot or reload), for the config tool."""
+    return {"errors": list(state.load_errors)}
+
+
 @app.get("/api/queue", dependencies=[Depends(_check_auth)])
 async def get_queue():
     return queue.depths()

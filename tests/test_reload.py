@@ -60,12 +60,24 @@ async def test_reload_picks_up_handlers_and_webhooks(cfg_dir):
     assert res["restart_required"] == [] and res["restarted"] == []
 
 
+def _client():
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url="http://t")
+
+
 async def test_invalid_handler_is_reported_not_loaded(cfg_dir):
     (cfg_dir / "handlers" / "60.0-broken.json").write_text("{nope")
     write_handler(cfg_dir, "61.0-bad.json", id="bad")
     res = await reload.reload()
     assert res["handlers"] == ["echo"]
     assert len(res["errors"]) == 2 and "60.0-broken.json" in res["errors"][0]
+    assert state.load_errors == res["errors"]
+    r = await _client().get("/api/admin/load-errors", headers={"Authorization": "Bearer tok"})
+    assert r.json() == {"errors": res["errors"]}
+
+    (cfg_dir / "handlers" / "60.0-broken.json").unlink()
+    (cfg_dir / "handlers" / "61.0-bad.json").unlink()
+    await reload.reload()
+    assert state.load_errors == []
 
 
 async def test_port_change_needs_restart(cfg_dir):

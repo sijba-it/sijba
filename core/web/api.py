@@ -343,6 +343,38 @@ async def _handle_plugin_reply_chunk(msg: dict) -> None:
     )
 
 
+async def _handle_plugin_post(plugin_id: Optional[str], msg: dict) -> None:
+    """Route a {"type": "post"} message: something that happened in the
+    plugin's own channel without a sijba message behind it — e.g. a prompt
+    typed into a Remote Control session on the phone, and its answer. Shown
+    in that channel's thread (persisted + live), never routed anywhere else:
+    unlike `inject` it starts no turn, so no can_inject gate — but a plugin
+    may only post into a channel it registered itself."""
+    channel_id = msg.get("channel")
+    text = msg.get("text", "")
+    role = msg.get("role") if msg.get("role") in ("user", "bot") else "bot"
+    if not channel_id or not text:
+        return
+    if not plugin_id or registry._channel_to_plugin.get(channel_id) != plugin_id:
+        _logger.warning(f"post from {plugin_id!r} into foreign channel {channel_id!r} — dropped")
+        return
+    source = str(msg.get("source") or "plugin")
+    handler_id = f"plugin:{channel_id}"
+    try:
+        transcript.append(
+            chat_id=channel_id, channel=channel_id, role=role, text=text,
+            handler_id=None if role == "user" else handler_id, source=source,
+        )
+    except Exception as exc:
+        _logger.warning(f"transcript append (post) failed: {exc}")
+    if role == "user":
+        state.broadcast_reply({"type": "user_message", "text": text, "source": source, "channel": channel_id})
+    else:
+        state.broadcast_reply({"type": "reply", "text": text, "source": source,
+                               "channel": channel_id, "handler_id": handler_id})
+    _logger.info(f"[plugin:{channel_id}] post {role} ({len(text)} chars)")
+
+
 @app.websocket("/api/plugin/ws")
 async def plugin_ws(websocket: WebSocket):
     """Persistent connection for external plugins (Cursor, Claude, ...).
@@ -362,6 +394,9 @@ async def plugin_ws(websocket: WebSocket):
       client -> server: {"type": "inject", "channel", "target", "text"}     (new message *from*
                           `channel` *into* `target`, not a reply to this turn; requires
                           channel_permissions.can_inject(channel) — see core/channel_permissions.py)
+      client -> server: {"type": "post", "channel", "role": "user"|"bot", "text", "source"?}
+                         (show a message in the plugin's *own* channel thread that no sijba
+                          message started — e.g. a prompt typed on the phone and its answer)
       either direction:  {"type": "ping"} / {"type": "pong"}                (heartbeat)
     """
     token = websocket.query_params.get("token")
@@ -410,6 +445,11 @@ async def plugin_ws(websocket: WebSocket):
                 if plugin_id:
                     registry.plugin_heartbeat(plugin_id)
                 await _handle_plugin_inject(msg)
+
+            elif mtype == "post":
+                if plugin_id:
+                    registry.plugin_heartbeat(plugin_id)
+                await _handle_plugin_post(plugin_id, msg)
 
             elif mtype == "channel_update":
                 if plugin_id:

@@ -372,6 +372,35 @@ async def test_plugin_reply_from_non_web_source_is_not_broadcast(db, replies):
     assert transcript.list_messages("42", "projekt-a"), "still persisted"
 
 
+async def test_plugin_post_shows_in_own_channel_thread(db, replies):
+    register_channel("remote-control-a", "remote-control:a")
+
+    await api._handle_plugin_post("remote-control-a", {
+        "type": "post", "channel": "remote-control:a", "role": "user", "text": "vom handy", "source": "phone"})
+    await api._handle_plugin_post("remote-control-a", {
+        "type": "post", "channel": "remote-control:a", "role": "bot", "text": "antwort"})
+
+    events = replies.drain()
+    assert [(e["type"], e["channel"], e["text"]) for e in events] == [
+        ("user_message", "remote-control:a", "vom handy"),
+        ("reply", "remote-control:a", "antwort"),
+    ]
+    assert events[1]["handler_id"] == "plugin:remote-control:a"
+    msgs = transcript.list_messages("remote-control:a", "remote-control:a")
+    assert [(m["role"], m["text"]) for m in msgs] == [("user", "vom handy"), ("bot", "antwort")]
+
+
+async def test_plugin_post_into_a_foreign_channel_is_dropped(db, replies):
+    register_channel("cursor-a", "cursor:a")
+    register_channel("remote-control-b", "remote-control:b")
+
+    await api._handle_plugin_post("remote-control-b", {"channel": "cursor:a", "role": "bot", "text": "fake"})
+    await api._handle_plugin_post(None, {"channel": "cursor:a", "role": "bot", "text": "fake"})
+
+    assert replies.drain() == []
+    assert transcript.list_messages("cursor:a", "cursor:a") == []
+
+
 async def test_plugin_reply_from_a_webhook_source_is_broadcast(db, replies):
     """A webhook has no transport of its own — unlike Telegram above — so the
     app is the only place its reply can show up, and only if pushed live."""

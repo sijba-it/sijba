@@ -31,7 +31,7 @@ External processes (e.g. a kubectl agent on the k8s master) can attach at runtim
 Core will `POST` the message envelope to `{url}{invoke_path}` and expect a normal plugin JSON response.
 
 ```bash
-curl -X POST https://sijba.edv-bartl.at/api/register \
+curl -X POST https://<account>.sijba.eu/api/register \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{

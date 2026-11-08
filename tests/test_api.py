@@ -668,6 +668,13 @@ def test_no_webhook_config_accepts_anything(noauth_client):
     assert r.json()["source"] == "webhook"
 
 
+def test_require_auth_blocks_open_webhooks(noauth_client, monkeypatch):
+    monkeypatch.setenv("SIJBA_REQUIRE_AUTH", "1")
+    r = noauth_client.post("/webhook/whatever", json={"text": "x"})
+
+    assert r.status_code == 403
+
+
 def test_webhook_chat_id_and_target(multi_client):
     multi_client.post(
         "/webhook/tok-voice",

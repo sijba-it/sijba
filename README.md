@@ -56,6 +56,8 @@ sijba-config/
 
 All options can also be set via env vars: `SIJBA_AUTH_TOKEN`, `SIJBA_WEBHOOK_TOKEN`, `SIJBA_PORT`, `SIJBA_DB_PATH`, `SIJBA_LOG_LEVEL`.
 
+Set `SIJBA_REQUIRE_AUTH=1` on internet-facing (hosted) installs: Core **exits at startup** if `auth_token` or any webhook token is missing. Self-hosted local installs leave it unset — open API is allowed when tokens are omitted.
+
 ---
 
 ## Handler config

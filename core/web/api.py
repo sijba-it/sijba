@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from sse_starlette.sse import EventSourceResponse
 
+import core.config as config
 import core.log as log
 import core.channel_permissions as channel_permissions
 import core.msg_queue as queue
@@ -688,7 +689,9 @@ def _webhook_source(token: str) -> Optional[str]:
     if _token_ok(token, _webhook_token):
         return "webhook"
     if not _webhook_token and not _webhooks:
-        return "webhook"  # no webhook auth configured at all
+        if config.require_auth():
+            return None
+        return "webhook"  # self-hosted dev: no webhook auth configured
     return None
 
 

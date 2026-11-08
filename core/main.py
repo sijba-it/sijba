@@ -33,6 +33,7 @@ async def main() -> None:
     global _logger
 
     cfg = config.load()
+    config.validate_startup_security(cfg)
     log.setup(cfg.get("log_level", "INFO"))
     _logger = log.get("main")
     state.configure_log_buffer(cfg.get("log_buffer_size", 1000))

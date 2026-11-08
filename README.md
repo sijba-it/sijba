@@ -180,7 +180,7 @@ curl -X DELETE http://localhost:8080/api/store/llm/123456789 -H "Authorization: 
 | `GET` | `/api/logs` | SSE live log stream |
 | `GET` | `/api/queue` | Queue status counts |
 | `POST` | `/api/message` | Inject a message (`target` optional → one handler; omit → full pipeline) |
-| `GET` | `/api/replies` | SSE replies for `web` / `app` sources |
+| `WS` | `/api/ws/replies` | Live replies for `web` / `app` sources |
 | `POST` | `/api/register` | Register a remote HTTP handler / pipeline |
 | `POST` | `/api/register/{id}/heartbeat` | Refresh registration TTL |
 | `DELETE` | `/api/register/{id}` | Unregister remote handler |

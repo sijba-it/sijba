@@ -170,17 +170,17 @@ Route and answer it with handlers scoped to that source:
 
 ---
 
-## Logs & replies
+## Logs & live replies
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/logs` | SSE live log stream |
-| `GET` | `/api/replies` | SSE outbound replies for `web` / `app` sources |
+| `WS` | `/api/ws/replies` | Live outbound events for `web` / `app` sources |
 | `GET` | `/api/transcript` | Recent messages for a `chat_id` + `channel` (bounded) |
 
-SSE clients that cannot set `Authorization` use a `?ticket=` (see top).
+WebSocket clients that cannot set `Authorization` use a `?ticket=` (see top).
 
-`/api/replies` events: `{"type": "reply" | "reply_chunk"}` (bot output),
+`/api/ws/replies` events: `{"type": "reply" | "reply_chunk"}` (bot output),
 `{"type": "user_message"}` (an inbound message from an entry point with no
 client of its own, e.g. a `POST /webhook/{token}` call — pushed so it shows up
 live), `{"type": "delivery_failed"}`, `{"type": "channel_status"}`. Events for
@@ -190,9 +190,6 @@ channel the message routed through.
 
 ```bash
 curl -N http://localhost:8080/api/logs \
-  -H "Authorization: Bearer secret"
-
-curl -N http://localhost:8080/api/replies \
   -H "Authorization: Bearer secret"
 ```
 

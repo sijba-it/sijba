@@ -39,7 +39,7 @@ class Envelope(TypedDict):
     _activity_broadcast: NotRequired[bool]  # push the inbound message live to web/app clients
 
 
-# Sources that carry their own live return path (web/app SSE/WS) instead of
+# Sources that carry their own live return path (web/app WebSocket) instead of
 # going out via an outbound handler. Shared by pipeline + queue so msg_queue
 # can surface delivery failures without importing pipeline.
 _SELF_DELIVERING_SOURCES = ("web", "app", "internal")

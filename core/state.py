@@ -25,7 +25,7 @@ log_buffer: Deque[Dict[str, Any]] = deque(maxlen=1000)
 # Active SSE asyncio.Queue instances (one per connected log viewer)
 sse_queues: Set[asyncio.Queue] = set()
 
-# Active queues for outbound replies (web/app clients, SSE and WebSocket)
+# Active queues for outbound replies (web/app clients over WebSocket)
 reply_queues: Set[asyncio.Queue] = set()
 
 

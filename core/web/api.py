@@ -502,7 +502,7 @@ async def plugin_ws(websocket: WebSocket):
 
 
 # ------------------------------------------------------------------
-# SSE / WebSocket streams
+# Live streams (SSE logs, WebSocket replies)
 # ------------------------------------------------------------------
 
 # Idle gap after which a keepalive goes out so proxies don't drop the stream.
@@ -537,26 +537,9 @@ async def stream_logs(request: Request):
     return EventSourceResponse(_sse_stream(request, q, state.sse_queues))
 
 
-@app.get("/api/replies", dependencies=[Depends(_check_auth)])
-async def stream_replies(request: Request):
-    """SSE endpoint: outbound replies for web/app clients."""
-    q: asyncio.Queue = asyncio.Queue(maxsize=200)
-    state.reply_queues.add(q)
-
-    return EventSourceResponse(_sse_stream(request, q, state.reply_queues))
-
-
 @app.websocket("/api/ws/replies")
 async def ws_replies(websocket: WebSocket):
-    """WebSocket variant of /api/replies for web/app clients.
-
-    Same fan-out (state.reply_queues) and same JSON event shapes as the SSE
-    endpoint — this is an additional transport, not a replacement. A native
-    WebSocket gets protocol-level close/error signaling that a hand-rolled
-    HTTP streaming client can't rely on (no silent-stale-connection class of
-    bug), at the cost of needing a WS-capable client library instead of
-    plain http.
-    """
+    """Live outbound events for web/app clients (replies, chunks, delivery_failed, …)."""
     if not _authorized(websocket.headers, websocket.query_params, "/api/ws/replies"):
         await websocket.close(code=4401)
         return

@@ -76,7 +76,7 @@ def wired(tmp_path):
 
 @pytest.fixture
 def replies():
-    """Collects everything broadcast to SSE/WS reply clients."""
+    """Collects everything broadcast to WebSocket reply clients."""
     import asyncio
 
     q: asyncio.Queue = asyncio.Queue(maxsize=100)

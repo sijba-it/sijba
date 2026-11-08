@@ -111,6 +111,6 @@ Restarts are expected to be harmless, which takes three things:
 
 **An outbound message nobody delivered goes back on the queue.** `process_outbound` counts how many handlers actually took the message — a handler that could not be invoked (dead remote, timeout, garbage response) does not count. If nothing took it, the message is deferred with a backoff (`5s, 15s, 60s, 300s`) rather than being marked `done`. After `MAX_ATTEMPTS` or an hour it is marked `failed` with the reason in `last_error`, and logged. It never spins forever, and it never disappears quietly.
 
-The exception is sources that carry their own return path: `web`, `app`, and `internal` replies reach the app over the SSE/WebSocket reply stream, so having no outbound handler is the normal case for them and is not retried. An explicitly named `respond.target` is always expected to exist, whatever the source.
+The exception is sources that carry their own return path: `web`, `app`, and `internal` replies reach the app over `/api/ws/replies`, so having no outbound handler is the normal case for them and is not retried. An explicitly named `respond.target` is always expected to exist, whatever the source.
 
 **Messages orphaned mid-flight are reclaimed.** A row left `claimed` by a process that died is requeued at startup — nothing else ever looks at `claimed` rows.

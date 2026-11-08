@@ -57,7 +57,7 @@ async def _broadcast_channel_status(
     channel_id: str, status: str, plugin_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Broadcast channel status change to all SSE reply clients."""
+    """Broadcast channel status change to all live reply WebSocket clients."""
     event: Dict[str, Any] = {
         "type": "channel_status",
         "channel_id": channel_id,

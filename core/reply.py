@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Optional
 
 import core.log as log
+import core.registry as registry
 import core.state as state
 import core.transcript as transcript
 from core.envelope import new_envelope
@@ -68,6 +69,9 @@ def deliver(
     # in the app — so it has to be pushed live too. Deliberately not widened
     # beyond that; the other sources carry their own return path.
     in_pipeline_view = source in ("web", "app") or source.startswith("webhook")
+    mirror_pipeline = in_pipeline_view and (
+        source.startswith("webhook") or not registry._channel_to_plugin.get(channel)
+    )
     if in_pipeline_view:
         state.broadcast_reply({
             "type": event,
@@ -77,9 +81,7 @@ def deliver(
             "source": source,
             "source_meta": source_meta,
             "channel": channel,
-            # Also belongs in the cross-source Pipeline / per-webhook tiles,
-            # even when `channel` points at a plugin channel it routed through.
-            "in_pipeline": True,
+            "in_pipeline": mirror_pipeline,
         })
 
     if not final or not text:
@@ -87,7 +89,7 @@ def deliver(
 
     # Mirror into the shared pipeline-activity stream so the Pipeline / per-
     # webhook tiles show the reply too, not just the plugin-channel thread.
-    if in_pipeline_view:
+    if mirror_pipeline:
         try:
             transcript.append(
                 chat_id=transcript.PIPELINE_CHAT_ID,

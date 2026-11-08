@@ -323,6 +323,16 @@ def _in_pipeline_view(src: str) -> bool:
     return src in ("web", "app") or src.startswith("webhook")
 
 
+def _mirror_inbound_to_pipeline(src: str, target: str | None) -> bool:
+    if not _in_pipeline_view(src):
+        return False
+    if src.startswith("webhook"):
+        return True
+    if target and registry._channel_to_plugin.get(target):
+        return False
+    return True
+
+
 def _record_pipeline_inbound(envelope: dict, src: str) -> None:
     """Mirror a freshly-arrived message into the shared pipeline-activity
     stream (`transcript.PIPELINE_CHAT_ID`). Unlike `_record_user_message` this
@@ -395,9 +405,10 @@ async def process_inbound(envelope: dict) -> None:
     # under the channel's own transcript thread instead.
     record_user = envelope.get("depth", 0) == 0
 
-    # The cross-source pipeline view mirrors every depth-0 web/app/webhook
-    # message regardless of where it routes next (plugin channel included).
-    if record_user:
+    # Mirror into the cross-source Pipeline tile for webhooks and for messages
+    # that enter via the Pipeline composer — not when the app targets a plugin
+    # channel directly (that tile has its own transcript).
+    if record_user and _mirror_inbound_to_pipeline(src, target):
         _record_pipeline_inbound(envelope, src)
 
     if target:

@@ -6,7 +6,6 @@ Located in `plugins-builtin/`. Reference with `{sijba_plugins}/...` in handler c
 
 - [audit.sh](#auditsh)
 - [echo.py](#echopy)
-- [telegram.py](#telegrampy)
 - [llm/main.py](#llmmainpy)
 - [iobroker/main.py](#iobrokermainpy)
 - [regex-router/main.py](#regex-routermainpy)
@@ -23,7 +22,6 @@ Logs every message and continues the pipeline. Place at priority 0 — always ru
   "id": "audit",
   "priority": 0.0,
   "direction": "inbound",
-  "lifecycle": "per_message",
   "type": "exec_json",
   "await_response": false,
   "exec": "{sijba_plugins}/audit.sh"
@@ -41,7 +39,6 @@ Replies with `echo: <text>` and stops the pipeline. Useful for testing.
   "id": "echo",
   "priority": 99.0,
   "direction": "inbound",
-  "lifecycle": "per_message",
   "type": "exec_json",
   "exec": "{sijba_plugins}/echo.py",
   "match": { "regex": "(?i)^echo\\b" }
@@ -50,34 +47,11 @@ Replies with `echo: <text>` and stops the pipeline. Useful for testing.
 
 ---
 
-## telegram.py
+## Telegram
 
-Combined Telegram source + outbound sink in one persistent process. Two handlers share
-one process via `shared_process`:
-
-```json
-// 10.0-telegram-source.json
-{
-  "id": "telegram-source",
-  "direction": "source",
-  "lifecycle": "persistent",
-  "type": "exec_json",
-  "exec": "{sijba_plugins}/telegram.py",
-  "env": { "TELEGRAM_BOT_TOKEN": "${TELEGRAM_BOT_TOKEN}" },
-  "startup": { "restart_policy": "on_failure" }
-}
-
-// 10.1-telegram-out.json
-{
-  "id": "telegram-out",
-  "direction": "outbound",
-  "lifecycle": "persistent",
-  "type": "exec_json",
-  "shared_process": "telegram-source",
-  "await_response": true,
-  "match": { "source": ["telegram"] }
-}
-```
+Use the [`sijba-telegram`](https://github.com/sijba-it/sijba-telegram) connector image
+(self-registers via `POST /api/register`, long-polls the Bot API, injects inbound text
+with `POST /api/message`). Provision it from the config tool or `sijba-provisioner-k8s`.
 
 ---
 

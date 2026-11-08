@@ -8,7 +8,7 @@
 |------|-------------|
 | [architecture.md](architecture.md) | System overview, pipeline flow, envelope structure |
 | [handlers.md](handlers.md) | Handler config schema, all fields, response format |
-| [plugins.md](plugins.md) | Built-in plugins — audit, echo, telegram, llm, iobroker, router |
+| [plugins.md](plugins.md) | Built-in plugins — audit, echo, llm, iobroker, router |
 | [routing.md](routing.md) | Routing strategies, router_hint, inject mechanism, multi-agent |
 | [api.md](api.md) | REST API endpoints, curl examples |
 
@@ -19,8 +19,6 @@ sijba-config/
   core.yaml          ← port, auth_token, db_path, log_level
   handlers/
     0.0-audit.json   ← always-on logging
-    10.0-telegram-source.json
-    10.1-telegram-out.json
     20.0-iobroker.json
     40.0-router-llm.json
     50.0-llm.json

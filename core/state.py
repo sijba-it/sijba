@@ -19,9 +19,6 @@ registered_handlers: Dict[str, Dict[str, Any]] = {}
 # handler_id -> state string (pending/starting/healthy/degraded/restarting/stopped)
 handler_states: Dict[str, str] = {}
 
-# handler_id -> PersistentHandler instance (lifecycle.py)
-persistent: Dict[str, Any] = {}
-
 # Circular log buffer, replayed to each newly connected log viewer
 log_buffer: Deque[Dict[str, Any]] = deque(maxlen=1000)
 

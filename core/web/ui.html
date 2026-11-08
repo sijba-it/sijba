@@ -183,7 +183,7 @@ function renderHandlers(handlers) {
         <span class="badge ${h.state}">${h.state}</span>
         <button class="toggle-btn" onclick="toggleHandler('${esc(h.id)}')">${h.state==='stopped'?'enable':'disable'}</button>
       </div>
-      <div class="meta">${h.direction} · ${h.lifecycle} · ${h.type}${h.category.length?' · ['+h.category.join(', ')+']':''}</div>
+      <div class="meta">${h.direction} · ${h.type}${h.category.length?' · ['+h.category.join(', ')+']':''}</div>
     </div>
   `).join('');
 }

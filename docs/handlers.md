@@ -18,8 +18,6 @@ One `.json` file per handler in `handlers/`. The filename prefix sets the priori
 ```
 handlers/
   0.0-audit.json         → priority 0.0   (runs first)
-  10.0-telegram-source.json
-  10.1-telegram-out.json
   20.0-iobroker.json
   40.0-router-llm.json
   50.0-llm.json
@@ -50,7 +48,6 @@ This applies to `core.yaml` as well (port, auth tokens, webhooks, etc.) — ever
   "id": "my-handler",
   "priority": 10.0,
   "direction": "inbound",
-  "lifecycle": "per_message",
   "type": "exec_json",
   "exec": "{sijba_plugins}/myplugin/main.py",
 
@@ -78,11 +75,9 @@ This applies to `core.yaml` as well (port, auth tokens, webhooks, etc.) — ever
   "timeout_seconds": 30,
 
   "args": [],
-  "shared_process": "other-handler-id",
   "startup": {
     "url": "http://localhost:9000",
-    "invoke_path": "/invoke",
-    "restart_policy": "on_failure"
+    "invoke_path": "/invoke"
   }
 }
 ```
@@ -95,8 +90,7 @@ This applies to `core.yaml` as well (port, auth tokens, webhooks, etc.) — ever
 |-------|---------|-------------|
 | `id` | required | Unique handler identifier |
 | `priority` | from filename | Lower = runs first |
-| `direction` | required | `inbound` / `outbound` / `source` |
-| `lifecycle` | `per_message` | `per_message` / `persistent` |
+| `direction` | required | `inbound` / `outbound` |
 | `type` | required | `exec_json` / `http` |
 | `exec` | — | Path to executable. Use `{sijba_plugins}/...` for builtins |
 | `continue_on_match` | `true` | Whether to continue pipeline after this handler matches |
@@ -110,7 +104,6 @@ This applies to `core.yaml` as well (port, auth tokens, webhooks, etc.) — ever
 | `context.key` | `chat_id` | Field from source_meta to use as store key |
 | `env` | `{}` | Extra env vars passed to the process. `${VAR}` expands from host env |
 | `timeout_seconds` | `10` | Per-invocation timeout |
-| `shared_process` | — | Reuse another persistent handler's process |
 
 ---
 

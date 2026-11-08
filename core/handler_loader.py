@@ -16,7 +16,6 @@ _schema: dict = {}
 DEFAULTS: Dict[str, Any] = {
     "priority": 50.0,
     "category": [],
-    "lifecycle": "per_message",
     "required": False,
     "await_response": True,
     "allow_direct_inject": False,
@@ -56,6 +55,33 @@ def load(config_dir: Path, errors: List[str] | None = None) -> List[Dict[str, An
             if errors is not None:
                 errors.append(f"{path.name}: {exc}")
             continue
+
+        if handler.get("lifecycle") == "persistent":
+            msg = f"{path.name}: lifecycle 'persistent' (NDJSON) is no longer supported — use a connector (/api/register) or plugin WebSocket"
+            _logger.error(msg)
+            if errors is not None:
+                errors.append(msg)
+            continue
+        if handler.get("direction") == "source":
+            msg = f"{path.name}: direction 'source' is no longer supported — use a connector or /api/message"
+            _logger.error(msg)
+            if errors is not None:
+                errors.append(msg)
+            continue
+        if handler.get("shared_process"):
+            msg = f"{path.name}: shared_process is no longer supported"
+            _logger.error(msg)
+            if errors is not None:
+                errors.append(msg)
+            continue
+
+        # Drop legacy keys so older configs with lifecycle: per_message still load.
+        handler.pop("lifecycle", None)
+        handler.pop("shared_process", None)
+        if isinstance(handler.get("startup"), dict):
+            handler["startup"].pop("restart_policy", None)
+            if not handler["startup"]:
+                handler.pop("startup", None)
 
         # Derive priority from filename if not explicit
         if "priority" not in handler:

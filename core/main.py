@@ -15,29 +15,14 @@ import core.msg_queue as queue
 import core.store as store
 import core.transcript as transcript
 import core.handler_loader as handler_loader
-import core.lifecycle as lifecycle
 import core.pipeline as pipeline
 import core.registry as registry
 import core.reply as reply
 import core.channel_permissions as channel_permissions
 import core.reload as reload
-from core.envelope import new_envelope
 from core.web.api import app, configure as configure_api
 
 _logger = None
-
-
-# ------------------------------------------------------------------
-# Source callback: called by source plugins when they emit a message
-# ------------------------------------------------------------------
-
-async def _source_callback(raw: dict) -> None:
-    queue.enqueue_inbound(new_envelope(
-        source=raw.get("source", "unknown"),
-        text=raw.get("text", ""),
-        source_meta=raw.get("source_meta", {}),
-        metadata=raw.get("metadata", {}),
-    ))
 
 
 # ------------------------------------------------------------------
@@ -87,11 +72,7 @@ async def main() -> None:
     state.load_errors = []
     state.file_handlers = handler_loader.load(config_dir, errors=state.load_errors)
     for h in state.file_handlers:
-        hid = h["id"]
-        if h.get("lifecycle") == "persistent":
-            state.handler_states[hid] = "pending"
-        else:
-            state.handler_states[hid] = "healthy"
+        state.handler_states[h["id"]] = "healthy"
     registry.rebuild()
 
     # Remote handlers registered before the last restart — back immediately,
@@ -118,10 +99,7 @@ async def main() -> None:
     for name in sorted(set((cfg.get("webhooks") or {}).values())):
         _logger.info(f"Webhook configured: webhook:{name}")
 
-    reload.configure(cfg, _source_callback)
-
-    # Start persistent handlers (including sources)
-    await lifecycle.start_all(state.handlers, config_dir, _source_callback)
+    reload.configure(cfg)
 
     # Queue workers
     asyncio.create_task(queue.run_inbound_worker(pipeline.process_inbound))
@@ -172,7 +150,6 @@ async def main() -> None:
     try:
         await server.serve()
     finally:
-        await lifecycle.stop_all()
         registry.stop_plugin_cleanup_task()
         _logger.info("Sijba stopped")
 

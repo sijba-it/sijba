@@ -67,7 +67,6 @@ One `.json` file per handler in `handlers/`. Filename prefix sets the sort prior
   "id": "my-handler",
   "priority": 10.0,
   "direction": "inbound",
-  "lifecycle": "per_message",
   "type": "exec_json",
   "exec": "./plugins/my_plugin.py",
   "match": { "regex": "(?i)^hello" },
@@ -75,7 +74,7 @@ One `.json` file per handler in `handlers/`. Filename prefix sets the sort prior
 }
 ```
 
-Key fields: `direction` (`inbound`/`outbound`/`source`), `lifecycle` (`per_message`/`persistent`), `type` (`exec_json`/`http`).
+Key fields: `direction` (`inbound`/`outbound`), `type` (`exec_json`/`http`).
 
 See `schema/handler.schema.json` for the full schema and `examples/handlers/` for ready-to-use configs.
 
@@ -83,11 +82,10 @@ See `schema/handler.schema.json` for the full schema and `examples/handlers/` fo
 
 ## Plugin types
 
-| Type | Lifecycle | Description |
-|------|-----------|-------------|
-| `exec_json` | per_message | JSON envelope via stdin, JSON response via stdout. |
-| `exec_json` | persistent | Long-running process, NDJSON over stdin/stdout. Also used by `source` handlers. |
-| `http` | per_message | Core POSTs the envelope to a remote URL. Used by `/api/register` (see [api.md](docs/api.md)). |
+| Type | Description |
+|------|-------------|
+| `exec_json` | Spawn per message. JSON envelope via stdin, JSON response via stdout. |
+| `http` | Core POSTs the envelope to a remote URL. Used by `/api/register` (see [api.md](docs/api.md)). |
 
 ---
 
@@ -99,17 +97,12 @@ Located in `plugins-builtin/` — reference with `{sijba_plugins}/...` in handle
 |--------|-------------|
 | `audit.sh` | Logs every message, continues pipeline |
 | `echo.py` | Replies with `echo: <text>`, stops pipeline |
-| `telegram.py` | Combined Telegram source + outbound in one process |
 | `llm/main.py` | Multi-provider LLM with per-chat conversation memory |
 | `iobroker/main.py` | ioBroker smart home control via REST API |
 
 ### Telegram
 
-Copy `examples/handlers/10.0-telegram-source.json` and `10.1-telegram-out.json` to your `handlers/` dir.
-
-```json
-"env": { "TELEGRAM_BOT_TOKEN": "${TELEGRAM_BOT_TOKEN}" }
-```
+Use the [`sijba-telegram`](https://github.com/sijba-it/sijba-telegram) connector (provisioned via the config tool). It registers with Core over `/api/register` and injects inbound text via `/api/message`.
 
 ### LLM
 

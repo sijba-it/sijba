@@ -536,7 +536,6 @@ def register(body: dict) -> dict:
         "id": hid,
         "priority": priority,
         "direction": body.get("direction", "inbound"),
-        "lifecycle": "per_message",
         "type": "http",
         "category": body.get("category") or [],
         "required": False,

@@ -153,7 +153,6 @@ async def list_handlers():
             "id": h["id"],
             "priority": h["priority"],
             "direction": h["direction"],
-            "lifecycle": h.get("lifecycle", "per_message"),
             "type": h.get("type"),
             "state": state.handler_states.get(h["id"], "unknown"),
             "category": h.get("category", []),
@@ -203,32 +202,15 @@ async def unregister_handler(handler_id: str):
 
 @app.post("/api/handlers/{handler_id}/toggle", dependencies=[Depends(_check_auth)])
 async def toggle_handler(handler_id: str):
-    from core import lifecycle as lc
-
-    handler = next((h for h in state.handlers if h["id"] == handler_id), None)
-    if handler is None:
+    if not any(h["id"] == handler_id for h in state.handlers):
         raise HTTPException(status_code=404, detail="Handler not found")
 
     current = state.handler_states.get(handler_id, "healthy")
-
     if current == "stopped":
-        # Re-enable
-        if handler.get("lifecycle") == "persistent":
-            ph = state.persistent.get(handler_id)
-            if ph is None:
-                ph = lc.PersistentHandler(handler, _config_dir)
-                state.persistent[handler_id] = ph
-            asyncio.create_task(ph.start())
-        else:
-            state.handler_states[handler_id] = "healthy"
-        new_state = state.handler_states.get(handler_id, "starting")
+        state.handler_states[handler_id] = "healthy"
+        new_state = "healthy"
     else:
-        # Disable
         state.handler_states[handler_id] = "stopped"
-        if handler.get("lifecycle") == "persistent":
-            ph = state.persistent.get(handler_id)
-            if ph:
-                asyncio.create_task(ph.stop())
         new_state = "stopped"
 
     return {"id": handler_id, "state": new_state}

@@ -222,15 +222,6 @@ def test_absolute_exec_is_left_alone(tmp_path):
     assert plugin_runner._resolve_exec("/usr/bin/true", tmp_path) == "/usr/bin/true"
 
 
-async def test_persistent_handler_without_instance_continues(tmp_path, db):
-    h = handler("ghost", lifecycle="persistent")
-
-    resp = await plugin_runner.invoke(h, {"id": "e1", "source_meta": {}}, tmp_path)
-
-    assert resp["continue"] is True
-    assert resp["_error"], "a failed invoke must be distinguishable from a real response"
-
-
 # ------------------------------------------------------------------
 # The router must be able to see plugin channels, not just handlers
 # ------------------------------------------------------------------

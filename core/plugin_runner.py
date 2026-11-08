@@ -71,16 +71,7 @@ async def invoke(handler: Dict[str, Any], envelope: Envelope, config_dir: Path) 
         summaries += registry.channel_routing_targets()
         envelope = {**envelope, "handlers": summaries}
 
-    lifecycle = handler.get("lifecycle", "per_message")
-
-    if lifecycle == "persistent":
-        ph = state.persistent.get(handler["id"])
-        if ph is None:
-            _logger.error(f"No persistent instance for handler '{handler['id']}'")
-            return {"continue": True, "_error": "no persistent instance"}
-        response = await ph.invoke(envelope)
-    else:
-        response = await _invoke_per_message(handler, envelope, config_dir)
+    response = await _invoke_per_message(handler, envelope, config_dir)
 
     # Save context_update if returned
     if ctx_loc and "context_update" in response:

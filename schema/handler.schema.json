@@ -6,9 +6,8 @@
   "properties": {
     "id": {"type": "string", "minLength": 1},
     "priority": {"type": "number"},
-    "direction": {"type": "string", "enum": ["inbound", "outbound", "source"]},
+    "direction": {"type": "string", "enum": ["inbound", "outbound"]},
     "category": {"type": "array", "items": {"type": "string"}},
-    "lifecycle": {"type": "string", "enum": ["per_message", "persistent"]},
     "type": {"type": "string", "enum": ["exec_json", "http"]},
     "required": {"type": "boolean"},
     "await_response": {"type": "boolean"},
@@ -47,16 +46,11 @@
       "type": "boolean",
       "description": "If true, core injects a 'handlers' summary (id + router_hint) into the envelope before invoking this plugin."
     },
-    "shared_process": {
-      "type": "string",
-      "description": "ID of another persistent handler whose process to reuse instead of spawning a new one."
-    },
     "startup": {
       "type": "object",
       "properties": {
         "url": {"type": "string"},
-        "invoke_path": {"type": "string"},
-        "restart_policy": {"type": "string", "enum": ["always", "on_failure", "never"]}
+        "invoke_path": {"type": "string"}
       },
       "additionalProperties": false
     }

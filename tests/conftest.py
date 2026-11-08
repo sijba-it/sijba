@@ -30,7 +30,6 @@ def clean_state():
     state.file_handlers = []
     state.registered_handlers = {}
     state.handler_states = {}
-    state.persistent = {}
     state.configure_log_buffer(1000)
     state.log_buffer.clear()
     state.sse_queues = set()
@@ -99,7 +98,6 @@ def handler(hid: str, **overrides) -> dict:
         "id": hid,
         "priority": 50.0,
         "direction": "inbound",
-        "lifecycle": "per_message",
         "type": "exec_json",
         "category": [],
         "required": False,

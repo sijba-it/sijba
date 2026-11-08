@@ -430,7 +430,6 @@ def test_loader_applies_defaults_and_sorts(tmp_path):
 
     assert [h["id"] for h in loaded] == ["audit", "echo"], "priority from filename"
     assert loaded[0]["priority"] == 0.0
-    assert loaded[0]["lifecycle"] == "per_message"
     assert loaded[0]["timeout_seconds"] == 10
     assert loaded[0]["continue_on_match"] is True
 

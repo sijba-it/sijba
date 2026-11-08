@@ -1,7 +1,6 @@
 """POST /api/admin/reload: apply edited config without restarting Core."""
 from __future__ import annotations
 import json
-import stat
 
 import httpx
 import pytest
@@ -10,13 +9,6 @@ import core.config as config
 import core.reload as reload
 import core.state as state
 import core.web.api as api
-
-PLUGIN = """#!/usr/bin/env python3
-import json, sys
-for line in sys.stdin:
-    req = json.loads(line)
-    print(json.dumps({"req_id": req["req_id"], "continue": True}), flush=True)
-"""
 
 
 def write_handler(cfg_dir, name, **h):
@@ -34,15 +26,8 @@ def cfg_dir(tmp_path, monkeypatch, db):
     monkeypatch.delenv("SIJBA_PORT", raising=False)
     api.configure(auth_token="tok", webhook_token=None, config_dir=d,
                   upload_dir=tmp_path, webhooks={})
-    reload.configure(config.load(), source_callback=None)
+    reload.configure(config.load())
     return d
-
-
-@pytest.fixture
-async def stop_persistent():
-    yield
-    for ph in list(state.persistent.values()):
-        await ph.stop()
 
 
 async def test_reload_picks_up_handlers_and_webhooks(cfg_dir):
@@ -84,31 +69,6 @@ async def test_port_change_needs_restart(cfg_dir):
     (cfg_dir / "core.yaml").write_text("port: 9090\n")
     res = await reload.reload()
     assert res["restart_required"] == ["port"]
-
-
-async def test_persistent_handlers_restart_only_when_changed(cfg_dir, stop_persistent):
-    exe = cfg_dir / "p.py"
-    exe.write_text(PLUGIN)
-    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
-    write_handler(cfg_dir, "20.0-worker.json", id="worker", direction="inbound",
-                  type="exec_json", lifecycle="persistent", exec=str(exe))
-
-    res = await reload.reload()
-    assert res["restarted"] == ["worker"]
-    first = state.persistent["worker"]
-    assert state.handler_states["worker"] == "healthy"
-
-    res = await reload.reload()
-    assert res["restarted"] == [] and state.persistent["worker"] is first
-
-    write_handler(cfg_dir, "20.0-worker.json", id="worker", direction="inbound",
-                  type="exec_json", lifecycle="persistent", exec=str(exe), timeout_seconds=5)
-    res = await reload.reload()
-    assert res["restarted"] == ["worker"] and state.persistent["worker"] is not first
-
-    (cfg_dir / "handlers" / "20.0-worker.json").unlink()
-    res = await reload.reload()
-    assert "worker" not in state.persistent and "worker" not in state.handler_states
 
 
 async def test_endpoint_requires_auth(cfg_dir):

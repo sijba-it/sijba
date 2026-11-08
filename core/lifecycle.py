@@ -25,6 +25,7 @@ from typing import Any, Dict, Optional
 
 import core.log as log
 import core.state as state
+from core.envelope import Envelope
 from core.plugin_runner import BUILTIN_DIR, resolve_env
 
 _logger = log.get("lifecycle")
@@ -141,12 +142,12 @@ class PersistentHandler:
     # Invocation
     # ------------------------------------------------------------------
 
-    async def invoke(self, envelope: dict) -> dict:
+    async def invoke(self, envelope: Envelope) -> dict:
         if self._get_state() != "healthy":
             return {"continue": True}
         return await self._invoke_ndjson(envelope)
 
-    async def _invoke_ndjson(self, envelope: dict) -> dict:
+    async def _invoke_ndjson(self, envelope: Envelope) -> dict:
         if not self.process or self.process.stdin is None:
             return {"continue": True}
 

@@ -1,6 +1,20 @@
 # REST API
 
-All endpoints require `Authorization: Bearer <token>` when `auth_token` is set in `core.yaml`.
+All endpoints require `Authorization: Bearer <token>` when `auth_token` is set in `core.yaml` —
+WebSockets (`/api/plugin/ws`, `/api/ws/replies`) included.
+
+The token never belongs in a URL (URLs end up in proxy and ingress logs). A
+client that cannot set a header — a browser WebSocket, a download link opened
+in the browser — first fetches a one-time ticket and passes that instead:
+
+```bash
+curl -X POST http://localhost:8080/api/ticket -H "Authorization: Bearer secret"
+# {"ticket": "…", "expires_in": 60}
+wscat -c "ws://localhost:8080/api/ws/replies?ticket=…"
+```
+
+A ticket works for exactly one request or connection, within 60 s.
+`?token=<auth_token>` is still accepted but deprecated and logged as a warning.
 
 ## Contents
 
@@ -164,7 +178,7 @@ Route and answer it with handlers scoped to that source:
 | `GET` | `/api/replies` | SSE outbound replies for `web` / `app` sources |
 | `GET` | `/api/transcript` | Recent messages for a `chat_id` + `channel` (bounded) |
 
-SSE clients that cannot set `Authorization` may pass `?token=<auth_token>`.
+SSE clients that cannot set `Authorization` use a `?ticket=` (see top).
 
 `/api/replies` events: `{"type": "reply" | "reply_chunk"}` (bot output),
 `{"type": "user_message"}` (an inbound message from an entry point with no
@@ -178,7 +192,8 @@ channel the message routed through.
 curl -N http://localhost:8080/api/logs \
   -H "Authorization: Bearer secret"
 
-curl -N "http://localhost:8080/api/replies?token=secret"
+curl -N http://localhost:8080/api/replies \
+  -H "Authorization: Bearer secret"
 ```
 
 ### Transcript

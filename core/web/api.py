@@ -1,7 +1,10 @@
 """FastAPI application: REST endpoints + SSE log stream."""
 from __future__ import annotations
 import asyncio
+import hmac
 import json
+import secrets
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -9,7 +12,6 @@ from typing import Optional
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse
 
 import core.log as log
@@ -38,15 +40,15 @@ app.add_middleware(
 _auth_token: Optional[str] = None
 _webhook_token: Optional[str] = None
 _webhooks: dict = {}  # token -> name, from the `webhooks:` config block
-_config_dir: Optional[Path] = None
-_upload_dir: Optional[Path] = None
+_config_dir: Path = Path(".")
+_upload_dir: Path = Path("uploads")
 
 # PVC is small (1Gi) and this is a single-user instance — keep uploads modest.
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
-def configure(auth_token: str, webhook_token: str, config_dir: Path,
-              upload_dir: Path, webhooks: dict = None) -> None:
+def configure(auth_token: Optional[str], webhook_token: Optional[str], config_dir: Path,
+              upload_dir: Path, webhooks: Optional[dict] = None) -> None:
     global _auth_token, _webhook_token, _webhooks, _config_dir, _upload_dir
     _auth_token = auth_token
     _webhook_token = webhook_token
@@ -59,22 +61,55 @@ def configure(auth_token: str, webhook_token: str, config_dir: Path,
 # Auth
 # ------------------------------------------------------------------
 
-_bearer = HTTPBearer(auto_error=False)
+# The auth token never goes into a URL — URLs end up in ingress, proxy and
+# browser-history logs. Clients that can set a header send
+# `Authorization: Bearer <token>` (WebSockets included). Those that can't — a
+# browser WebSocket, a plain download link — first trade the token for a
+# ticket via POST /api/ticket and put that in `?ticket=`: single use and gone
+# after TICKET_TTL_SECONDS, so a logged ticket is worthless.
+TICKET_TTL_SECONDS = 60
+_tickets: dict[str, float] = {}  # ticket -> expires_at
 
 
-def _check_auth(
-    request: Request,
-    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> None:
+def _token_ok(candidate: Optional[str], expected: Optional[str]) -> bool:
+    if not (candidate and expected):
+        return False
+    return hmac.compare_digest(candidate.encode(), expected.encode())
+
+
+def _consume_ticket(ticket: Optional[str]) -> bool:
+    now = time.monotonic()
+    for t, exp in list(_tickets.items()):
+        if exp < now:
+            del _tickets[t]
+    if not ticket:
+        return False
+    return _tickets.pop(ticket, 0.0) >= now
+
+
+def _legacy_query_token(token: Optional[str], where: str) -> bool:
+    """`?token=` — the old way, kept only until every client sends a header
+    or a ticket. Logged so the stragglers can be found."""
+    if not _token_ok(token, _auth_token):
+        return False
+    _logger.warning(f"auth: deprecated ?token= in URL on {where} — use a header or ?ticket=")
+    return True
+
+
+def _authorized(headers, query_params, where: str) -> bool:
     if not _auth_token:
-        return  # no auth configured
-    # EventSource cannot set Authorization headers — allow ?token= for SSE.
-    query_token = request.query_params.get("token")
-    if creds and creds.credentials == _auth_token:
-        return
-    if query_token and query_token == _auth_token:
-        return
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+        return True  # no auth configured
+    scheme, _, credentials = (headers.get("authorization") or "").partition(" ")
+    if scheme.lower() == "bearer" and _token_ok(credentials.strip(), _auth_token):
+        return True
+    if _consume_ticket(query_params.get("ticket")):
+        return True
+    return _legacy_query_token(query_params.get("token"), where)
+
+
+def _check_auth(request: Request) -> None:
+    if not _authorized(request.headers, request.query_params, request.url.path):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
 
 # ------------------------------------------------------------------
@@ -100,6 +135,14 @@ async def version():
         "version": os.environ.get("SIJBA_VERSION", "dev"),
         "commit": os.environ.get("GIT_COMMIT", "unknown"),
     }
+
+
+@app.post("/api/ticket", dependencies=[Depends(_check_auth)])
+async def issue_ticket():
+    """One-time credential for a URL (browser WebSocket, download link)."""
+    ticket = secrets.token_urlsafe(32)
+    _tickets[ticket] = time.monotonic() + TICKET_TTL_SECONDS
+    return {"ticket": ticket, "expires_in": TICKET_TTL_SECONDS}
 
 
 @app.get("/api/handlers", dependencies=[Depends(_check_auth)])
@@ -309,8 +352,8 @@ async def _handle_plugin_inject(msg: dict) -> None:
         source="internal",
         text=text,
         source_meta={"injected_by": source_channel},
+        target=target,
     )
-    envelope["_target"] = target
     queue.enqueue_inbound(envelope)
     _logger.info(f"inject: {source_channel!r} -> {target!r} ({len(text)} chars)")
 
@@ -352,7 +395,7 @@ async def _handle_plugin_post(plugin_id: Optional[str], msg: dict) -> None:
     may only post into a channel it registered itself."""
     channel_id = msg.get("channel")
     text = msg.get("text", "")
-    role = msg.get("role") if msg.get("role") in ("user", "bot") else "bot"
+    role = "user" if msg.get("role") == "user" else "bot"
     if not channel_id or not text:
         return
     if not plugin_id or registry._channel_to_plugin.get(channel_id) != plugin_id:
@@ -399,8 +442,7 @@ async def plugin_ws(websocket: WebSocket):
                           message started — e.g. a prompt typed on the phone and its answer)
       either direction:  {"type": "ping"} / {"type": "pong"}                (heartbeat)
     """
-    token = websocket.query_params.get("token")
-    if _auth_token and token != _auth_token:
+    if not _authorized(websocket.headers, websocket.query_params, "/api/plugin/ws"):
         _logger.warning(f"plugin_ws: rejected connection from {websocket.client} — bad/missing token")
         await websocket.close(code=4401)
         return
@@ -533,8 +575,7 @@ async def ws_replies(websocket: WebSocket):
     bug), at the cost of needing a WS-capable client library instead of
     plain http.
     """
-    token = websocket.query_params.get("token")
-    if _auth_token and token != _auth_token:
+    if not _authorized(websocket.headers, websocket.query_params, "/api/ws/replies"):
         await websocket.close(code=4401)
         return
 
@@ -661,10 +702,9 @@ async def inject_message(request: Request):
         text=text,
         source_meta=source_meta,
         metadata=metadata,
-    )
-    if target:
         # Validated when the inbound worker runs (handler may not be loaded yet)
-        envelope["_target"] = target
+        target=target,
+    )
 
     mid = queue.enqueue_inbound(envelope)
     return {"id": mid, "status": "queued", "target": target}
@@ -680,7 +720,7 @@ def _webhook_source(token: str) -> Optional[str]:
     name = _webhooks.get(token)
     if name:
         return f"webhook:{name}"
-    if _webhook_token and token == _webhook_token:
+    if _token_ok(token, _webhook_token):
         return "webhook"
     if not _webhook_token and not _webhooks:
         return "webhook"  # no webhook auth configured at all
@@ -746,12 +786,12 @@ async def webhook(token: str, request: Request):
         source_meta.setdefault("chat_id", "web")
         target = (str(body.get("target") or "").strip()) or None
 
-    envelope = new_envelope(source=source, text=text, source_meta=source_meta)
-    # External entry point with no live client of its own — ask the pipeline to
-    # push this message to web/app clients so it shows up live in the tile.
-    envelope["_activity_broadcast"] = True
-    if target:
-        envelope["_target"] = target
+    envelope = new_envelope(
+        source=source, text=text, source_meta=source_meta, target=target,
+        # External entry point with no live client of its own — ask the pipeline
+        # to push this message to web/app clients so it shows up live in the tile.
+        activity_broadcast=True,
+    )
 
     mid = queue.enqueue_inbound(envelope)
     _logger.info(f"webhook [{source}]: {text[:120]!r}")

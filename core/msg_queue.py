@@ -11,7 +11,7 @@ import core.db as db
 import core.log as log
 import core.state as state
 import core.transcript as transcript
-from core.envelope import expects_outbound_delivery
+from core.envelope import Envelope, expects_outbound_delivery
 
 _logger = log.get("queue")
 
@@ -65,7 +65,7 @@ def init() -> None:
                     pass  # already migrated
 
 
-def enqueue(table: str, envelope: dict) -> str:
+def enqueue(table: str, envelope: Envelope) -> str:
     mid = envelope.setdefault("id", str(uuid.uuid4()))
     db.execute(
         f"INSERT OR IGNORE INTO {table} (id, envelope_json, status, depth, created_at)"
@@ -76,15 +76,15 @@ def enqueue(table: str, envelope: dict) -> str:
     return mid
 
 
-def enqueue_inbound(envelope: dict) -> str:
+def enqueue_inbound(envelope: Envelope) -> str:
     return enqueue(INBOUND, envelope)
 
 
-def enqueue_outbound(envelope: dict) -> str:
+def enqueue_outbound(envelope: Envelope) -> str:
     return enqueue(OUTBOUND, envelope)
 
 
-def _claim_next(table: str) -> Optional[tuple[str, dict]]:
+def _claim_next(table: str) -> Optional[tuple[str, Envelope]]:
     with db.write() as conn:
         row = conn.execute(
             f"SELECT id, envelope_json FROM {table}"
@@ -215,7 +215,7 @@ def depths() -> dict:
     return {"inbound": counts(INBOUND), "outbound": counts(OUTBOUND)}
 
 
-async def run_worker(table: str, fn: Callable[[dict], Awaitable[None]]) -> None:
+async def run_worker(table: str, fn: Callable[[Envelope], Awaitable[None]]) -> None:
     """Claim and process one message at a time; never let one failure stall
     the queue."""
     while True:
@@ -234,9 +234,9 @@ async def run_worker(table: str, fn: Callable[[dict], Awaitable[None]]) -> None:
             _set_status(table, mid, "failed")
 
 
-async def run_inbound_worker(fn: Callable[[dict], Awaitable[None]]) -> None:
+async def run_inbound_worker(fn: Callable[[Envelope], Awaitable[None]]) -> None:
     await run_worker(INBOUND, fn)
 
 
-async def run_outbound_worker(fn: Callable[[dict], Awaitable[None]]) -> None:
+async def run_outbound_worker(fn: Callable[[Envelope], Awaitable[None]]) -> None:
     await run_worker(OUTBOUND, fn)

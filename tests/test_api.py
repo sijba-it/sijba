@@ -73,10 +73,79 @@ def test_wrong_token_is_rejected(client):
     assert r.status_code == 401
 
 
-def test_query_token_is_accepted_for_sse(client):
-    """EventSource cannot set headers, so ?token= must work."""
+def test_legacy_query_token_still_works(client):
+    """Deprecated — kept until every client sends a header or a ticket."""
     r = client.get("/api/handlers?token=tok", headers={"Authorization": ""})
     assert r.status_code == 200
+
+
+def _ticket(client) -> str:
+    r = client.post("/api/ticket")
+    assert r.status_code == 200
+    return r.json()["ticket"]
+
+
+def test_ticket_needs_auth(client):
+    assert client.post("/api/ticket", headers={"Authorization": ""}).status_code == 401
+
+
+def test_ticket_authorizes_a_request_once(client):
+    t = _ticket(client)
+    no_header = {"Authorization": ""}
+    assert client.get(f"/api/handlers?ticket={t}", headers=no_header).status_code == 200
+    assert client.get(f"/api/handlers?ticket={t}", headers=no_header).status_code == 401
+
+
+def test_expired_ticket_is_rejected(client, monkeypatch):
+    t = _ticket(client)
+    later = api.time.monotonic() + api.TICKET_TTL_SECONDS + 1
+    monkeypatch.setattr(api.time, "monotonic", lambda: later)
+    r = client.get(f"/api/handlers?ticket={t}", headers={"Authorization": ""})
+    assert r.status_code == 401
+
+
+def test_unknown_ticket_is_rejected(client):
+    r = client.get("/api/handlers?ticket=made-up", headers={"Authorization": ""})
+    assert r.status_code == 401
+
+
+def test_replies_ws_accepts_a_bearer_header(client):
+    with client.websocket_connect("/api/ws/replies") as ws:
+        ws.close()
+
+
+def test_replies_ws_accepts_a_ticket(client):
+    t = _ticket(client)
+    with client.websocket_connect(f"/api/ws/replies?ticket={t}", headers={"Authorization": ""}) as ws:
+        ws.close()
+
+
+def test_replies_ws_without_credentials_is_closed(client):
+    from starlette.websockets import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/api/ws/replies", headers={"Authorization": ""}) as ws:
+            ws.receive_text()
+    assert exc.value.code == 4401
+
+
+def test_plugin_ws_accepts_a_bearer_header(client):
+    with client.websocket_connect("/api/plugin/ws") as ws:
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json() == {"type": "pong"}
+
+
+def test_plugin_ws_rejects_a_wrong_header(client):
+    from starlette.websockets import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/api/plugin/ws", headers={"Authorization": "Bearer nope"}) as ws:
+            ws.receive_json()
+    assert exc.value.code == 4401
+
+
+def test_webhook_does_not_accept_the_auth_token(client):
+    assert client.post("/webhook/tok", json={"text": "x"}).status_code == 403
 
 
 def test_no_auth_configured_allows_everything(noauth_client):

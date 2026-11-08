@@ -30,7 +30,7 @@ class PluginConnection:
     """Active WebSocket connection from an external plugin."""
     __slots__ = ("plugin_id", "ws", "channels", "last_seen", "capabilities")
 
-    def __init__(self, plugin_id: str, ws: Any, capabilities: Dict[str, Any] = None):
+    def __init__(self, plugin_id: str, ws: Any, capabilities: Optional[Dict[str, Any]] = None):
         self.plugin_id = plugin_id
         self.ws = ws
         self.channels: Dict[str, Dict[str, Any]] = {}
@@ -54,10 +54,11 @@ _pending_ttl_seconds = 3600.0
 
 
 async def _broadcast_channel_status(
-    channel_id: str, status: str, plugin_id: str = None, metadata: Dict[str, Any] = None
+    channel_id: str, status: str, plugin_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Broadcast channel status change to all SSE reply clients."""
-    event = {
+    event: Dict[str, Any] = {
         "type": "channel_status",
         "channel_id": channel_id,
         "status": status,
@@ -70,7 +71,7 @@ async def _broadcast_channel_status(
     state.broadcast_reply(event)
 
 
-def plugin_register(plugin_id: str, ws: Any, capabilities: Dict[str, Any] = None) -> PluginConnection:
+def plugin_register(plugin_id: str, ws: Any, capabilities: Optional[Dict[str, Any]] = None) -> PluginConnection:
     """Register a new plugin WebSocket connection."""
     conn = PluginConnection(plugin_id, ws, capabilities)
     _plugins[plugin_id] = conn

@@ -636,7 +636,7 @@ Core restart required (env vars)
 
 ## Core Tech Stack
 
-- **Language**: Python 3.11+
+- **Language**: Python 3.15
 - **Web framework**: FastAPI
 - **Queue + Store**: SQLite (via stdlib sqlite3)
 - **Config validation**: jsonschema

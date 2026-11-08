@@ -36,6 +36,7 @@ def now() -> str:
 def write() -> Iterator[sqlite3.Connection]:
     """Exclusive access, committed on clean exit. Use for multi-statement
     writes that must land together (e.g. insert + prune)."""
+    assert _conn is not None, "db.connect() not called"
     with _lock:
         yield _conn
         _conn.commit()
@@ -43,6 +44,7 @@ def write() -> Iterator[sqlite3.Connection]:
 
 @contextmanager
 def read() -> Iterator[sqlite3.Connection]:
+    assert _conn is not None, "db.connect() not called"
     with _lock:
         yield _conn
 

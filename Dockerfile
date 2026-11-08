@@ -1,4 +1,4 @@
-FROM docker.io/library/python:3.11-slim
+FROM docker.io/library/python:3.15-slim
 
 ARG SIJBA_VERSION=dev
 ARG GIT_COMMIT=unknown

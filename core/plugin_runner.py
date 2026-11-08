@@ -10,6 +10,7 @@ import httpx
 
 import core.log as log
 import core.state as state
+from core.envelope import Envelope
 
 _logger = log.get("plugin_runner")
 
@@ -34,7 +35,7 @@ def _resolve_exec(exec_path: str, config_dir: Path) -> str:
     return exec_path
 
 
-def _context_key(handler: dict, envelope: dict) -> tuple[str, str] | None:
+def _context_key(handler: dict, envelope: Envelope) -> tuple[str, str] | None:
     """Return (namespace, key) if this handler uses context, else None."""
     ctx_cfg = handler.get("context")
     if not ctx_cfg:
@@ -45,7 +46,7 @@ def _context_key(handler: dict, envelope: dict) -> tuple[str, str] | None:
     return namespace, str(key)
 
 
-async def invoke(handler: Dict[str, Any], envelope: dict, config_dir: Path) -> dict:
+async def invoke(handler: Dict[str, Any], envelope: Envelope, config_dir: Path) -> dict:
     """Invoke handler, return response. Never raises."""
     import core.store as store
 
@@ -89,7 +90,7 @@ async def invoke(handler: Dict[str, Any], envelope: dict, config_dir: Path) -> d
     return response
 
 
-async def _invoke_per_message(handler: Dict[str, Any], envelope: dict, config_dir: Path) -> dict:
+async def _invoke_per_message(handler: Dict[str, Any], envelope: Envelope, config_dir: Path) -> dict:
     htype = handler.get("type", "exec_json")
     if htype == "exec_json":
         return await _exec_json(handler, envelope, config_dir)
@@ -99,7 +100,7 @@ async def _invoke_per_message(handler: Dict[str, Any], envelope: dict, config_di
     return {"continue": True, "_error": f"unknown handler type '{htype}'"}
 
 
-async def _exec_json(handler: dict, envelope: dict, config_dir: Path) -> dict:
+async def _exec_json(handler: dict, envelope: Envelope, config_dir: Path) -> dict:
     """Spawn the plugin, hand it the envelope as JSON on stdin, read a JSON
     response back from stdout."""
     exec_path = _resolve_exec(handler.get("exec", ""), config_dir)
@@ -138,7 +139,7 @@ async def _exec_json(handler: dict, envelope: dict, config_dir: Path) -> dict:
         return {"continue": True, "_error": "invalid JSON output"}
 
 
-async def _http_once(handler: dict, envelope: dict) -> dict:
+async def _http_once(handler: dict, envelope: Envelope) -> dict:
     """POST the envelope to a remote handler (see registry.register).
 
     A failure comes back as `_error` rather than an exception: the pipeline

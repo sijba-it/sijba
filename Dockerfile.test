@@ -1,7 +1,7 @@
 # Runs the test suite inside the build, so `docker build -f Dockerfile.test .`
 # fails when a test fails. Uses the build context rather than a bind mount, so
 # it works the same whether or not Jenkins itself runs in a container.
-FROM docker.io/library/python:3.11-slim
+FROM docker.io/library/python:3.15-slim
 
 WORKDIR /app
 
@@ -15,4 +15,5 @@ COPY plugins-builtin/ plugins-builtin/
 COPY tests/ tests/
 
 RUN python -m pyflakes core/ tests/
+RUN python -m mypy --cache-dir /tmp/mypy core/
 RUN python -m pytest -q

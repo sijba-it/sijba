@@ -60,7 +60,7 @@ def deliver(
             source_meta=source_meta,
             parent_id=parent_id,
             depth=depth,
-            _respond_target=respond_target,
+            respond_target=respond_target,
         ))
 
     # Web/app clients have no outbound sink of their own; they listen on SSE/WS.

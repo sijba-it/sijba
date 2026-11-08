@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import core.log as log
 import core.msg_queue as msg_queue
@@ -12,14 +12,18 @@ import core.plugin_runner as plugin_runner
 import core.registry as registry
 import core.reply as reply
 import core.transcript as transcript
-from core.envelope import expects_outbound_delivery, new_envelope
+from core.envelope import Envelope, expects_outbound_delivery, new_envelope
 
 _logger = log.get("pipeline")
 
+def _not_configured(envelope: Envelope) -> str:
+    raise RuntimeError("pipeline.configure() not called")
+
+
 # Injected at startup by main.py to avoid circular imports
-_enqueue_inbound = None
-_enqueue_outbound = None
-_config_dir: Optional[Path] = None
+_enqueue_inbound: Callable[[Envelope], str] = _not_configured
+_enqueue_outbound: Callable[[Envelope], str] = _not_configured
+_config_dir: Path = Path(".")
 _max_inject_depth: int = 5
 
 
@@ -35,7 +39,7 @@ def configure(enqueue_inbound, enqueue_outbound, config_dir: Path, max_inject_de
 # Match logic
 # ------------------------------------------------------------------
 
-def _matches(handler: dict, envelope: dict) -> bool:
+def _matches(handler: dict, envelope: Envelope) -> bool:
     match = handler.get("match") or {}
     if not match:
         return True
@@ -89,7 +93,7 @@ def _resolve_inject_target(target: Optional[str], *, require_allow_direct: bool 
 # Core pipeline runner
 # ------------------------------------------------------------------
 
-def _outbound_handlers_for(envelope: dict) -> list:
+def _outbound_handlers_for(envelope: Envelope) -> list:
     """Filter outbound handlers based on respond_target.
 
     - target == "source"  → handlers whose match.source includes envelope.source
@@ -128,8 +132,8 @@ def _outbound_handlers_for(envelope: dict) -> list:
 
 async def _run(
     direction: str,
-    envelope: dict,
-    handler_override: list = None,
+    envelope: Envelope,
+    handler_override: Optional[list] = None,
     *,
     skip_match: bool = False,
 ) -> int:
@@ -217,8 +221,8 @@ async def _run(
                     # real external source is remembered so a reply that
                     # eventually comes back from a plugin channel still reaches
                     # that source's outbound handler (e.g. Pushover for voice).
-                    _origin_source=envelope.get("_origin_source") or envelope.get("source"),
-                    _origin_source_meta=(
+                    origin_source=envelope.get("_origin_source") or envelope.get("source"),
+                    origin_source_meta=(
                         envelope.get("_origin_source_meta")
                         or envelope.get("source_meta") or {}
                     ),
@@ -246,7 +250,7 @@ async def _run(
 # Public entry points
 # ------------------------------------------------------------------
 
-async def _route_to_plugin_channel(ch: dict, envelope: dict) -> bool:
+async def _route_to_plugin_channel(ch: dict, envelope: Envelope) -> bool:
     """Send `envelope` to a registered plugin channel and stash reply context
     so the eventual {"type": "reply"} from the plugin can be routed back to
     the originating web/app client and the right transcript channel."""
@@ -333,7 +337,7 @@ def _mirror_inbound_to_pipeline(src: str, target: str | None) -> bool:
     return True
 
 
-def _record_pipeline_inbound(envelope: dict, src: str) -> None:
+def _record_pipeline_inbound(envelope: Envelope, src: str) -> None:
     """Mirror a freshly-arrived message into the shared pipeline-activity
     stream (`transcript.PIPELINE_CHAT_ID`). Unlike `_record_user_message` this
     runs for every depth-0 web/app/webhook message — including ones that then
@@ -371,7 +375,7 @@ def _record_pipeline_inbound(envelope: dict, src: str) -> None:
         })
 
 
-def _record_user_message(envelope: dict, channel: str, src: str) -> None:
+def _record_user_message(envelope: Envelope, channel: str, src: str) -> None:
     """Persist the incoming message for cross-device replay. Never fatal."""
     chat_id = (envelope.get("source_meta") or {}).get("chat_id")
     body = envelope.get("pipeline_text") or envelope.get("text") or ""
@@ -392,7 +396,7 @@ def _record_user_message(envelope: dict, channel: str, src: str) -> None:
         _logger.warning(f"transcript append (user) failed: {exc}")
 
 
-async def process_inbound(envelope: dict) -> None:
+async def process_inbound(envelope: Envelope) -> None:
     src = envelope.get("source", "?")
     text = (envelope.get("pipeline_text") or "")[:80]
     target = envelope.pop("_target", None)
@@ -449,7 +453,7 @@ async def process_inbound(envelope: dict) -> None:
     await _run("inbound", envelope)
 
 
-async def process_outbound(envelope: dict) -> None:
+async def process_outbound(envelope: Envelope) -> None:
     src = envelope.get("source", "?")
     text = (envelope.get("pipeline_text") or "")[:80]
     _logger.info(f"outbound [{src}]: {text!r}")

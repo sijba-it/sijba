@@ -49,8 +49,8 @@ async def reload() -> Dict[str, Any]:
         )
         lvl = getattr(logging, str(cfg.get("log_level", "INFO")).upper(), logging.INFO)
         log.logger.setLevel(lvl)
-        for h in log.logger.handlers:
-            h.setLevel(lvl)
+        for lh in log.logger.handlers:
+            lh.setLevel(lvl)
         pipeline._max_inject_depth = cfg["max_inject_depth"]
 
         errors: List[str] = []

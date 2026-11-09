@@ -94,33 +94,24 @@ def test_non_mapping_webhooks_is_rejected_not_crashed(tmp_path, monkeypatch):
     assert cfg["webhooks"] == {}
 
 
-def test_require_auth_skipped_by_default(tmp_path, monkeypatch):
+def test_require_auth_on_by_default(tmp_path, monkeypatch):
     monkeypatch.delenv("SIJBA_REQUIRE_AUTH", raising=False)
     cfg = load_in(tmp_path, monkeypatch, "")
-
-    config.validate_startup_security(cfg)  # no raise
-
-
-def test_require_auth_needs_auth_token(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIJBA_REQUIRE_AUTH", "1")
-    cfg = load_in(tmp_path, monkeypatch, "webhooks:\n  voice: tok\n")
 
     with pytest.raises(SystemExit, match="auth_token"):
         config.validate_startup_security(cfg)
 
 
-def test_require_auth_needs_webhook_tokens(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIJBA_REQUIRE_AUTH", "1")
+def test_require_auth_opt_out(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIJBA_REQUIRE_AUTH", "0")
+    cfg = load_in(tmp_path, monkeypatch, "")
+
+    config.validate_startup_security(cfg)  # no raise
+
+
+def test_require_auth_ok_without_webhook_tokens(tmp_path, monkeypatch):
+    monkeypatch.delenv("SIJBA_REQUIRE_AUTH", raising=False)
     monkeypatch.setenv("SIJBA_AUTH_TOKEN", "secret")
     cfg = load_in(tmp_path, monkeypatch, "")
 
-    with pytest.raises(SystemExit, match="webhook"):
-        config.validate_startup_security(cfg)
-
-
-def test_require_auth_ok_with_named_webhooks(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIJBA_REQUIRE_AUTH", "1")
-    monkeypatch.setenv("SIJBA_AUTH_TOKEN", "secret")
-    cfg = load_in(tmp_path, monkeypatch, "webhooks:\n  voice: tok-v\n")
-
-    config.validate_startup_security(cfg)
+    config.validate_startup_security(cfg)  # no raise

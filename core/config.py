@@ -87,13 +87,10 @@ def load() -> Dict[str, Any]:
     return cfg
 
 
-def _env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
-
-
 def require_auth() -> bool:
-    """Hosted / internet-facing installs set SIJBA_REQUIRE_AUTH=1."""
-    return _env_flag("SIJBA_REQUIRE_AUTH")
+    """On by default; local dev installs opt out with SIJBA_REQUIRE_AUTH=0."""
+    val = os.environ.get("SIJBA_REQUIRE_AUTH", "").strip().lower()
+    return val not in ("0", "false", "no", "off")
 
 
 def _nonempty_str(val: Any) -> str:
@@ -103,20 +100,12 @@ def _nonempty_str(val: Any) -> str:
 
 
 def validate_startup_security(cfg: Dict[str, Any]) -> None:
-    """Refuse to start when auth is mandatory but API or webhooks are wide open."""
+    """Refuse to start when auth is mandatory but the API has no auth_token."""
     if not require_auth():
         return
 
     if not _nonempty_str(cfg.get("auth_token")):
         raise SystemExit(
-            "SIJBA_REQUIRE_AUTH is set but auth_token is missing or empty "
-            "(set auth_token in core.yaml or SIJBA_AUTH_TOKEN)"
-        )
-
-    has_webhooks = bool(cfg.get("webhooks"))
-    has_legacy_webhook = bool(_nonempty_str(cfg.get("webhook_token")))
-    if not has_webhooks and not has_legacy_webhook:
-        raise SystemExit(
-            "SIJBA_REQUIRE_AUTH is set but no webhook tokens are configured "
-            "(set webhook_token / webhooks in core.yaml or SIJBA_WEBHOOK_TOKEN)"
+            "auth_token is missing or empty (set auth_token in core.yaml or "
+            "SIJBA_AUTH_TOKEN, or SIJBA_REQUIRE_AUTH=0 for local dev)"
         )

@@ -660,8 +660,9 @@ def test_webhook_source_is_namespaced_away_from_trusted_sources(tmp_path, db):
     assert _first_queued()["source"] == "webhook:web"
 
 
-def test_no_webhook_config_accepts_anything(noauth_client):
+def test_no_webhook_config_accepts_anything(noauth_client, monkeypatch):
     """Unconfigured stays permissive for local development."""
+    monkeypatch.setenv("SIJBA_REQUIRE_AUTH", "0")
     r = noauth_client.post("/webhook/whatever", json={"text": "x"})
 
     assert r.status_code == 200
@@ -669,7 +670,7 @@ def test_no_webhook_config_accepts_anything(noauth_client):
 
 
 def test_require_auth_blocks_open_webhooks(noauth_client, monkeypatch):
-    monkeypatch.setenv("SIJBA_REQUIRE_AUTH", "1")
+    monkeypatch.delenv("SIJBA_REQUIRE_AUTH", raising=False)
     r = noauth_client.post("/webhook/whatever", json={"text": "x"})
 
     assert r.status_code == 403
